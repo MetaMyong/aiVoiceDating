@@ -1,0 +1,18 @@
+{
+  "css.lint.unknownAtRules": "ignore",
+  "scss.lint.unknownAtRules": "ignore",
+  "less.lint.unknownAtRules": "ignore",
+
+  "tailwindCSS.includeLanguages": {
+    "javascript": "javascript",
+    "typescript": "typescript",
+    "typescriptreact": "typescriptreact",
+    "html": "html",
+    "css": "css"
+  },
+
+  "editor.quickSuggestions": { "strings": true },
+
+  // optional: enable Tailwind IntelliSense if installed
+  "tailwindCSS.emmetCompletions": true
+}

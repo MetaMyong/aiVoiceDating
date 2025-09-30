@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root{--accent:#ff7a2d}
+html,body,#root{height:100%}
+body{@apply bg-bg font-sans text-gray-900}
+.app{@apply flex h-screen}
+.sidebar{@apply w-64 bg-white border-r px-4 py-6}
+.brand{@apply text-2xl font-bold text-accent mb-3}
+.conversations{@apply mb-4}
+.conv{@apply block w-full px-3 py-2 rounded-lg bg-white shadow-sm text-left}
+.settings{@apply mt-4 text-sm}
+.chat{@apply flex-1 flex flex-col}
+.messages{@apply flex-1 overflow-auto p-5}
+.msg{@apply max-w-[70%] p-3 rounded-xl mb-2}
+.msg.bot{@apply bg-white border}
+.composer{@apply relative border-t px-4 py-3}
+/* make sure the input inside composer fills the content area (account for embedded buttons with right padding) */
+.composer > input{@apply block w-full px-4 py-3 pr-28 rounded-lg border bg-white}
+.send{@apply bg-accent text-white rounded-lg px-4 py-2}
+@media (max-width:720px){
+  .sidebar{display:none}
+  .app{flex-direction:column}
+  .chat{height:100vh}
+}
