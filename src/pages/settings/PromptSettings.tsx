@@ -18,7 +18,7 @@ export default function PromptSettings(props: any){
   const [localBlocks, setLocalBlocks] = React.useState<PromptBlock[]>(() =>
     (promptBlocks || []).map((b: any, i: number) => (b.id ? b : { ...b, id: `block-${Date.now()}-${i}-${Math.random()}` }))
   )
-  // keep latest localBlocks for beforeunload
+  // keep latest localBlocks for beforeunload/debounce
   const localBlocksRef = React.useRef<PromptBlock[]>([])
   React.useEffect(() => { localBlocksRef.current = localBlocks }, [localBlocks])
   // debounce timer for edit saves
