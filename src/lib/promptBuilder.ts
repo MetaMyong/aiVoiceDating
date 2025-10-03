@@ -5,16 +5,42 @@ import { dbGet } from './indexeddb';
 // convId: optional conversation id (string) to load history from conversations/<id>.json on server side via API —
 // in this frontend-only helper we'll accept a history array passed in by caller.
 
-export type PromptBlock = { name:string, type: 'pure'|'conversation'|'persona'|'character'|'longterm'|'system', prompt:string, role: 'user'|'assistant'|'system', count?: number, startIndex?: number, endIndex?: number };
+export type PromptBlock = { name:string, type: 'pure'|'conversation'|'longterm'|'system', prompt:string, role: 'user'|'assistant'|'system', count?: number, startIndex?: number, endIndex?: number };
 
-export function buildPromptMessages(blocks: PromptBlock[], conversationHistory: Array<any> = []) {
+// 프롬프트에서 변수를 치환하는 함수
+function replaceVariables(text: string, variables: Record<string, string>): string {
+  let result = text;
+  for (const [key, value] of Object.entries(variables)) {
+    const regex = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
+    result = result.replace(regex, value);
+  }
+  return result;
+}
+
+export async function buildPromptMessages(blocks: PromptBlock[], conversationHistory: Array<any> = []) {
   const messages: Array<{ role: string, content: string }> = [];
+  
+  // IndexedDB에서 설정 가져오기
+  const settings = await dbGet('settingsCfg');
+  const selectedPersonaIndex = settings?.selectedPersonaIndex ?? 0;
+  const personas = settings?.personas || [];
+  const selectedPersona = personas[selectedPersonaIndex];
+  
+  // 치환할 변수들
+  const variables: Record<string, string> = {
+    user: selectedPersona?.name || 'User',
+    user_description: selectedPersona?.description || '',
+  };
+  
   for (const b of blocks) {
+    // 프롬프트 내용에서 변수 치환
+    const processedPrompt = replaceVariables(b.prompt, variables);
+    
     if (b.type === 'system') {
       // System prompt type - always use system role
-      messages.push({ role: 'system', content: b.prompt });
+      messages.push({ role: 'system', content: processedPrompt });
     } else if (b.type === 'pure') {
-      messages.push({ role: b.role, content: b.prompt });
+      messages.push({ role: b.role, content: processedPrompt });
     } else if (b.type === 'conversation') {
       // If startIndex/endIndex provided, use them as slice bounds (inclusive start, inclusive end)
       if (typeof b.startIndex === 'number' || typeof b.endIndex === 'number'){
@@ -37,8 +63,8 @@ export function buildPromptMessages(blocks: PromptBlock[], conversationHistory: 
         }
       }
     } else {
-      // persona/character/longterm: treat as system-like prompt
-      messages.push({ role: 'system', content: b.prompt });
+      // longterm: treat as system-like prompt
+      messages.push({ role: 'system', content: processedPrompt });
     }
   }
   return messages;

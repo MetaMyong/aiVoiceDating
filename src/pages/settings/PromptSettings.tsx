@@ -4,7 +4,7 @@ import { setSettings as idbSetSettings } from '../../lib/indexeddb'
 export type PromptBlock = {
   id: string
   name: string
-  type: 'pure' | 'conversation' | 'persona' | 'character' | 'longterm' | 'system'
+  type: 'pure' | 'conversation' | 'longterm' | 'system'
   prompt?: string
   role: 'user' | 'assistant' | 'system'
   startIndex?: number
@@ -255,8 +255,6 @@ export default function PromptSettings(props: any){
                           <option value="system">시스템 프롬프트</option>
                           <option value="pure">순수 프롬프트</option>
                           <option value="conversation">대화</option>
-                          <option value="persona">페르소나 프롬프트</option>
-                          <option value="character">캐릭터 프롬프트</option>
                           <option value="longterm">장기기억</option>
                         </select>
                       </div>

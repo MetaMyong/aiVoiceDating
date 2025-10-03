@@ -494,7 +494,7 @@ export default function Chat(){
 
       // Build messages from blocks WITHOUT adding user message at end
       // (user input is already inserted via {{user_input}} placeholder)
-      let builtMessages = buildPromptMessages(promptBlocks, messages);
+      let builtMessages = await buildPromptMessages(promptBlocks, messages);
       
       // Replace {{user_input}} placeholder with actual user input
       builtMessages = builtMessages.map(msg => ({

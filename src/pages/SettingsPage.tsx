@@ -4,12 +4,13 @@ import { getSettings as idbGetSettings, setSettings as idbSetSettings, getFishMo
 import PromptSettings from './settings/PromptSettings'
 import ModelSettings from './settings/ModelSettings'
 import AudioSettings from './settings/AudioSettings'
+import PersonaSettings from './settings/PersonaSettings'
 import AdvancedSettings from './settings/AdvancedSettings'
 import { pushToast } from '../components/Toast'
 
 export default function SettingsPage(){
   const [tab, setTab] = useState<'llm'|'stt'|'tts'|'api'|'prompt'>('llm');
-  const [leftSection, setLeftSection] = useState<'prompt'|'model'|'audio'|'advanced'>('prompt');
+  const [leftSection, setLeftSection] = useState<'prompt'|'model'|'audio'|'persona'|'advanced'>('prompt');
   const [audioTab, setAudioTab] = useState<'record'|'play'>('record');
 
   const [cfg, setCfg] = useState<any>({});
@@ -20,7 +21,7 @@ export default function SettingsPage(){
   const [fishError, setFishError] = useState('');
 
   const [promptBlocks, setPromptBlocks] = useState<any[]>([
-    { id: 'block-sys-1', name: '시스템 프롬프트', type: 'pure', prompt: 'You are a helpful AI assistant.', role: 'user' },
+    { id: 'block-sys-1', name: '시스템 프롬프트', type: 'pure', prompt: '# Persona\nYou are AI assistant. Always respond with helpful 2 to 4 sentences in Korean. DO NOT USE *MARKDOWN* or Emojis, () or [] brackets.', role: 'user' },
     { id: 'block-conv-2', name: '대화 이력', type: 'conversation', prompt: '', role: 'user' },
     { id: 'block-input-3', name: '사용자 입력', type: 'pure', prompt: '{{user_input}}', role: 'user' }
   ]);
@@ -65,9 +66,10 @@ export default function SettingsPage(){
   const effectiveBlocks = promptLocalRef.current ?? promptBlocks;
   // Sync parent state to latest before save
   setPromptBlocks(effectiveBlocks);
-  // Read latest settings (may have been updated by AudioSettings just above)
+  // Read latest settings from IndexedDB and merge with current cfg state
   const latest = await idbGetSettings();
-  await idbSetSettings({ ...(latest || cfg), promptBlocks: effectiveBlocks });
+  // cfg에는 페르소나 정보 등 최신 상태가 들어있으므로 cfg를 우선으로 병합
+  await idbSetSettings({ ...(latest || {}), ...cfg, promptBlocks: effectiveBlocks });
       await idbSetFishModels(fishModels || []);
       setStatus('설정이 로컬에 저장되었습니다');
       pushToast('설정이 저장되었습니다','success');
@@ -136,6 +138,7 @@ export default function SettingsPage(){
           <button onClick={()=>setLeftSection('prompt')} className={`text-left px-2 py-2 rounded ${leftSection==='prompt'?'bg-orange-100 text-orange-600 font-bold':''}`}>프롬프트</button>
           <button onClick={()=>setLeftSection('model')} className={`text-left px-2 py-2 rounded ${leftSection==='model'?'bg-orange-100 text-orange-600 font-bold':''}`}>모델</button>
           <button onClick={()=>setLeftSection('audio')} className={`text-left px-2 py-2 rounded ${leftSection==='audio'?'bg-orange-100 text-orange-600 font-bold':''}`}>오디오</button>
+          <button onClick={()=>setLeftSection('persona')} className={`text-left px-2 py-2 rounded ${leftSection==='persona'?'bg-orange-100 text-orange-600 font-bold':''}`}>페르소나</button>
           <button onClick={()=>setLeftSection('advanced')} className={`text-left px-2 py-2 rounded ${leftSection==='advanced'?'bg-orange-100 text-orange-600 font-bold':''}`}>고급설정</button>
         </aside>
 
@@ -190,6 +193,10 @@ export default function SettingsPage(){
             )}
 
             {leftSection === 'prompt' && <PromptPanel />}
+
+            {leftSection === 'persona' && (
+              <PersonaSettings cfg={cfg} setCfg={setCfg} />
+            )}
 
             {leftSection === 'advanced' && (
               <AdvancedSettings cfg={cfg} setCfg={setCfg} />

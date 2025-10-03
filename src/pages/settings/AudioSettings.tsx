@@ -219,8 +219,7 @@ export default function AudioSettings(props:any){
       };
       setCfg(newCfg);
       await idbSetSettings(newCfg);
-      pushToast('오디오 설정이 저장되었습니다','success');
-    }catch(e){ pushToast('오디오 설정 저장 실패','error'); }
+    }catch(e){ console.error('오디오 설정 저장 실패:', e); }
   }
 
   // Register parent-triggered save to persist the current selection values
