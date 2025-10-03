@@ -25,6 +25,8 @@ export default function SettingsPage(){
     { id: 'block-input-3', name: '사용자 입력', type: 'pure', prompt: '{{user_input}}', role: 'user' }
   ]);
   const [promptRightTab, setPromptRightTab] = useState<'params'|'blocks'|'other'>('blocks');
+  // Save hook from AudioSettings to ensure latest audio selections are persisted before global save
+  const audioSaveRef = useRef<null | (() => Promise<void>)>(null);
   // Track expanded panels by block ID (stable across reorders)
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string,boolean>>({});
   const dragIndexRef = useRef<number|null>(null);
@@ -55,11 +57,17 @@ export default function SettingsPage(){
 
   async function saveCfg(){
     try{
+  // Ensure latest audio settings are saved before consolidating cfg
+  if (audioSaveRef.current) {
+    try { await audioSaveRef.current(); } catch (e) { /* ignore child save errors, continue */ }
+  }
   // Persist latest child-local edits if available
   const effectiveBlocks = promptLocalRef.current ?? promptBlocks;
   // Sync parent state to latest before save
   setPromptBlocks(effectiveBlocks);
-  await idbSetSettings({ ...cfg, promptBlocks: effectiveBlocks });
+  // Read latest settings (may have been updated by AudioSettings just above)
+  const latest = await idbGetSettings();
+  await idbSetSettings({ ...(latest || cfg), promptBlocks: effectiveBlocks });
       await idbSetFishModels(fishModels || []);
       setStatus('설정이 로컬에 저장되었습니다');
       pushToast('설정이 저장되었습니다','success');
@@ -158,7 +166,7 @@ export default function SettingsPage(){
 
           <div className="flex-1 flex flex-col bg-gray-100 rounded-b-lg shadow-inner px-6 py-6">
             {leftSection === 'audio' && (
-              <AudioSettings leftSection={leftSection} audioTab={audioTab} cfg={cfg} setCfg={setCfg} />
+              <AudioSettings leftSection={leftSection} audioTab={audioTab} cfg={cfg} setCfg={setCfg} onRegisterSave={(fn: ()=>Promise<void>)=>{ audioSaveRef.current = fn; }} />
             )}
 
             {leftSection === 'model' && (

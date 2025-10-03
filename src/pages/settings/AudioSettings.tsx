@@ -3,11 +3,11 @@ import { getSettings as idbGetSettings, setSettings as idbSetSettings } from '..
 import { pushToast } from '../../components/Toast'
 
 export default function AudioSettings(props:any){
-  const { leftSection, audioTab, cfg, setCfg } = props;
+  const { leftSection, audioTab, cfg, setCfg, onRegisterSave } = props;
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedInputId, setSelectedInputId] = useState<string>('');
-  const [selectedOutputId, setSelectedOutputId] = useState<string>('');
+  const [selectedInputId, setSelectedInputId] = useState<string>(cfg?.selectedInputId || '');
+  const [selectedOutputId, setSelectedOutputId] = useState<string>(cfg?.selectedOutputId || '');
   const [monitorOn, setMonitorOn] = useState<boolean>(false);
   const [threshold, setThreshold] = useState<number>(-40);
   const thresholdRef = useRef<number>(threshold);
@@ -23,7 +23,23 @@ export default function AudioSettings(props:any){
   const audioElRef = useRef<HTMLAudioElement|null>(null);
 
   // 장치 권한을 선요청하고 enumerateDevices를 호출합니다.
-  async function refreshDevices(forceRequestPermission:boolean=false){
+  type RefreshOpts = {
+    forceRequestPermission?: boolean,
+    preferredInputId?: string,
+    preferredOutputId?: string,
+    preferredInputLabel?: string,
+    preferredOutputLabel?: string,
+    persistOnChange?: boolean,
+  };
+  async function refreshDevices(opts: RefreshOpts = {}){
+    const { 
+      forceRequestPermission = false,
+      preferredInputId,
+      preferredOutputId,
+      preferredInputLabel,
+      preferredOutputLabel,
+      persistOnChange = false,
+    } = opts;
     try{
       if(!(navigator && navigator.mediaDevices && navigator.mediaDevices.enumerateDevices)) return;
       // 권한이 없거나 목록이 비는 경우를 대비하여, 필요 시 오디오 권한을 먼저 요청
@@ -48,12 +64,9 @@ export default function AudioSettings(props:any){
       const outputs = devices.filter(d=>d.kind==='audiooutput');
       setInputDevices(inputs as MediaDeviceInfo[]);
       setOutputDevices(outputs as MediaDeviceInfo[]);
-
-      // 현재 선택된 장치가 목록에 없으면 자동 폴백
-      const inputExists = inputs.some(d=>d.deviceId===selectedInputId);
-      const outputExists = outputs.some(d=>d.deviceId===selectedOutputId);
-      if(!inputExists){ setSelectedInputId(inputs[0]?.deviceId || ''); }
-      if(!outputExists){ setSelectedOutputId(outputs[0]?.deviceId || ''); }
+      
+      // 장치 목록만 업데이트하고, 선택된 장치는 변경하지 않음
+      // (초기 로드 시 useEffect에서 이미 설정했으므로)
     }catch(e){ console.warn('refreshDevices failed', e); }
   }
 
@@ -62,19 +75,31 @@ export default function AudioSettings(props:any){
       try{
         const s = await idbGetSettings();
         if(s){
-          if(s.selectedInputId) setSelectedInputId(s.selectedInputId);
-          if(s.selectedOutputId) setSelectedOutputId(s.selectedOutputId);
           if(typeof s.threshold === 'number'){ setThreshold(s.threshold); thresholdRef.current = s.threshold; }
           if(typeof s.playbackVolume === 'number') setPlaybackVolume(s.playbackVolume);
+          
+          // 권한 요청 및 장치 목록 먼저 로드
+          await refreshDevices({ forceRequestPermission: true });
+          
+          // 장치 목록 로드 후, 저장된 값으로 설정 (이렇게 하면 드롭다운에 올바른 값이 표시됨)
+          if(s.selectedInputId) setSelectedInputId(s.selectedInputId);
+          if(s.selectedOutputId) setSelectedOutputId(s.selectedOutputId);
+        } else {
+          // 설정 없으면 권한만 요청
+          await refreshDevices({ forceRequestPermission: true });
         }
-      }catch(e){ console.warn('load audio settings failed', e); }
-      try{ await refreshDevices(true); }catch(e){}
+      }catch(e){ 
+        console.warn('load audio settings failed', e);
+        try{ await refreshDevices({ forceRequestPermission: true }); }catch(_){/*noop*/}
+      }
     })();
   },[]);
 
   // 장치 플러그/언플러그나 OS 변경에 반응하도록 devicechange 리스너 추가
   useEffect(()=>{
-    const handler = ()=>{ refreshDevices(); };
+    const handler = ()=>{ 
+      refreshDevices(); 
+    };
     try{ navigator?.mediaDevices?.addEventListener?.('devicechange', handler); }catch(_){/*noop*/}
     return ()=>{ try{ navigator?.mediaDevices?.removeEventListener?.('devicechange', handler); }catch(_){/*noop*/} };
   },[]);
@@ -97,14 +122,8 @@ export default function AudioSettings(props:any){
           if(err && (err.name==='OverconstrainedError' || err.name==='NotFoundError')){
             console.warn('Selected input not available, falling back to default device');
             pushToast('선택한 녹음 장치를 찾을 수 없어 기본 장치로 전환합니다.','info');
-            try{ await refreshDevices(true); }catch(_){/*noop*/}
+            await refreshDevices({ forceRequestPermission: true });
             stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            // 기본으로 바뀐 deviceId를 다시 저장
-            try{
-              const newDevices = await navigator.mediaDevices.enumerateDevices();
-              const firstInput = newDevices.find(d=>d.kind==='audioinput');
-              if(firstInput){ setSelectedInputId(firstInput.deviceId); }
-            }catch(_){/*noop*/}
           }else{
             throw err;
           }
@@ -179,14 +198,45 @@ export default function AudioSettings(props:any){
 
   function fmtDeviceLabel(d:MediaDeviceInfo){ return d.label || (d.kind==='audioinput' ? '마이크' : '스피커'); }
 
-  async function saveCfg(){
+  async function saveCfg(overrides?: Partial<{ selectedInputId: string; selectedOutputId: string; threshold: number; playbackVolume: number; }>) {
     try{
-      const newCfg = { ...(cfg||{}) , selectedInputId, selectedOutputId, threshold, playbackVolume };
+      const nextInputId = overrides?.selectedInputId ?? selectedInputId;
+      const nextOutputId = overrides?.selectedOutputId ?? selectedOutputId;
+      const nextThreshold = overrides?.threshold ?? threshold;
+      const nextPlaybackVolume = overrides?.playbackVolume ?? playbackVolume;
+
+      const inLabel = inputDevices.find(d=>d.deviceId===nextInputId)?.label || '';
+      const outLabel = outputDevices.find(d=>d.deviceId===nextOutputId)?.label || '';
+
+      const newCfg = { 
+        ...(cfg||{}),
+        selectedInputId: nextInputId,
+        selectedOutputId: nextOutputId,
+        selectedInputLabel: inLabel,
+        selectedOutputLabel: outLabel,
+        threshold: nextThreshold,
+        playbackVolume: nextPlaybackVolume
+      };
       setCfg(newCfg);
       await idbSetSettings(newCfg);
       pushToast('오디오 설정이 저장되었습니다','success');
     }catch(e){ pushToast('오디오 설정 저장 실패','error'); }
   }
+
+  // Register parent-triggered save to persist the current selection values
+  useEffect(()=>{
+    if(typeof onRegisterSave === 'function'){
+      onRegisterSave(async ()=>{
+        await saveCfg({
+          selectedInputId,
+          selectedOutputId,
+          threshold,
+          playbackVolume,
+        });
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[onRegisterSave, selectedInputId, selectedOutputId, threshold, playbackVolume, inputDevices, outputDevices]);
 
   if(leftSection !== 'audio') return null;
   return (
@@ -198,10 +248,18 @@ export default function AudioSettings(props:any){
               <div>
                 <label className="block text-sm font-medium">녹음 장치 선택</label>
                 <div className="flex gap-2 mt-2">
-                  <select className="flex-1 rounded border px-3 py-2" value={selectedInputId} onChange={async e=>{ const v = e.target.value; setSelectedInputId(v); try{ await saveCfg(); }catch(_){}}}>
+                  <select className="flex-1 rounded border px-3 py-2" value={selectedInputId} onChange={async e=>{ 
+                    const v = e.target.value; 
+                    const label = inputDevices.find(d=>d.deviceId===v)?.label || '';
+                    setSelectedInputId(v);
+                    const current = await idbGetSettings();
+                    const updated = { ...(current||{}), selectedInputId: v, selectedInputLabel: label };
+                    await idbSetSettings(updated);
+                    setCfg(updated);
+                  }}>
                     {inputDevices.length===0 ? <option>장치 없음</option> : inputDevices.map((d:any)=>(<option key={d.deviceId} value={d.deviceId}>{fmtDeviceLabel(d)}</option>))}
                   </select>
-                  <button type="button" className="px-3 py-2 bg-gray-200 rounded" onClick={()=>refreshDevices(true)}>새로고침</button>
+                  <button type="button" className="px-3 py-2 bg-gray-200 rounded" onClick={()=>refreshDevices({ forceRequestPermission: true })}>새로고침</button>
                 </div>
               </div>
               <div>
@@ -225,7 +283,7 @@ export default function AudioSettings(props:any){
                 </div>
                 <div className="mt-2 text-xs text-gray-500">Threshold (dB)</div>
                 <div className="flex items-center gap-3">
-                  <input type="range" min={-80} max={0} step={0.5} value={threshold} onChange={async e=>{ const v = Number(e.target.value); setThreshold(v); thresholdRef.current = v; try{ await saveCfg(); }catch(_){ } }} className="w-full mt-2" />
+                  <input type="range" min={-80} max={0} step={0.5} value={threshold} onChange={async e=>{ const v = Number(e.target.value); setThreshold(v); thresholdRef.current = v; try{ await saveCfg({ threshold: v }); }catch(_){ } }} className="w-full mt-2" />
                   <div className="text-sm font-mono w-20 text-right">{threshold} dB</div>
                 </div>
               </div>
@@ -240,7 +298,15 @@ export default function AudioSettings(props:any){
               <div>
                 <label className="block text-sm font-medium">재생 장치 선택</label>
                 <div className="flex gap-2 mt-2">
-                  <select className="flex-1 rounded border px-3 py-2" value={selectedOutputId} onChange={async e=>{ const v = e.target.value; setSelectedOutputId(v); try{ await saveCfg(); }catch(_){}}}>
+                  <select className="flex-1 rounded border px-3 py-2" value={selectedOutputId} onChange={async e=>{ 
+                    const v = e.target.value; 
+                    const label = outputDevices.find(d=>d.deviceId===v)?.label || '';
+                    setSelectedOutputId(v);
+                    const current = await idbGetSettings();
+                    const updated = { ...(current||{}), selectedOutputId: v, selectedOutputLabel: label };
+                    await idbSetSettings(updated);
+                    setCfg(updated);
+                  }}>
                     {outputDevices.length===0 ? <option>장치 없음</option> : outputDevices.map((d:any)=>(<option key={d.deviceId} value={d.deviceId}>{fmtDeviceLabel(d)}</option>))}
                   </select>
                   <button type="button" className="px-3 py-2 bg-gray-200 rounded" onClick={async ()=>{
@@ -262,7 +328,7 @@ export default function AudioSettings(props:any){
               </div>
               <div>
                 <div className="flex items-center justify-between"><div className="text-sm text-gray-600">재생 볼륨</div><div className="text-xs text-gray-500">{Math.round(playbackVolume*100)}%</div></div>
-                <input type="range" min={0} max={1} step={0.01} value={playbackVolume} onChange={async e=>{ const v = Number(e.target.value); setPlaybackVolume(v); try{ await saveCfg(); }catch(_){}}} className="w-full mt-2" />
+                <input type="range" min={0} max={1} step={0.01} value={playbackVolume} onChange={async e=>{ const v = Number(e.target.value); setPlaybackVolume(v); try{ await saveCfg({ playbackVolume: v }); }catch(_){}}} className="w-full mt-2" />
               </div>
             </div>
           </div>

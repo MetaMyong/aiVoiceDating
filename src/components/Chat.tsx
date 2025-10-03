@@ -243,6 +243,30 @@ export default function Chat(){
     const audioUrl = nextItem.url;
     const audio = new Audio(audioUrl);
     audioRef.current = audio;
+    // Helper: apply sink before playing for reliability
+    const applySinkThenPlay = async () => {
+      try {
+        const settings = await getSettings();
+        const sinkId = (settings as any)?.selectedOutputId;
+        if (sinkId && typeof (audio as any).setSinkId === 'function') {
+          await (audio as any).setSinkId(sinkId);
+        }
+      } catch (_) { /* ignore sink errors */ }
+      try {
+        await audio.play();
+        console.log('[Chat] TTS playing:', currentSentence);
+      } catch (e) {
+        console.error('[Chat] Audio play error:', e);
+        // Clean up on error
+        if (typingTimer) clearInterval(typingTimer);
+        ttsPlayingRef.current = false;
+        ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
+        ttsNextSeqToPlayRef.current = nextSeq + 1;
+        setCurrentTypingSentence('');
+        // Immediately attempt to play next to avoid any visual gap
+        attemptPlayNextOrdered();
+      }
+    };
     
     // Get the sentence for this sequence
     const currentSentence = nextItem.text || '';
@@ -299,20 +323,8 @@ export default function Chat(){
       audio.addEventListener('loadedmetadata', updateTypingSpeed, { once: true });
     }
     
-    // Start playing audio immediately
-    audio.play().then(() => {
-      console.log('[Chat] TTS playing:', currentSentence);
-    }).catch((e) => {
-      console.error('[Chat] Audio play error:', e);
-      // Clean up on error
-      if (typingTimer) clearInterval(typingTimer);
-      ttsPlayingRef.current = false;
-      ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
-      ttsNextSeqToPlayRef.current = nextSeq + 1;
-      setCurrentTypingSentence('');
-  // Immediately attempt to play next to avoid any visual gap
-  attemptPlayNextOrdered();
-    });
+    // Apply sink (if any) and then play
+    applySinkThenPlay();
     
     audio.onended = () => {
       console.log('[Chat] TTS ended:', currentSentence);
@@ -789,7 +801,12 @@ export default function Chat(){
   async function toggleMic(){
     if (!listening) {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const settings = await getSettings();
+        let constraints: MediaStreamConstraints = { audio: true };
+        if ((settings as any)?.selectedInputId) {
+          constraints = { audio: { deviceId: { exact: (settings as any).selectedInputId } as any } } as MediaStreamConstraints;
+        }
+        const s = await navigator.mediaDevices.getUserMedia(constraints);
         streamRef.current = s;
         startVAD(s);
         setListening(true);
