@@ -3,9 +3,19 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs-extra');
 const axios = require('axios');
+const multer = require('multer');
+const { getAiResponse, generateContentStream } = require('./llmModel');
+const { audioToText } = require('./sttProcess');
+const { synthChunkSync } = require('./ttsProcess');
 
 const app = express();
 app.use(express.json());
+
+// Multer for file uploads
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
 
 // CORS 허용 (개발용)
 app.use((req, res, next) => {
@@ -16,6 +26,216 @@ app.use((req, res, next) => {
     return res.sendStatus(204);
   }
   next();
+});
+
+// LLM 생성 엔드포인트
+app.post('/api/llm/generate', async (req, res) => {
+  try {
+    const { messages, model, apiKey } = req.body;
+    
+    console.log('[API] LLM generate request:', { 
+      messageCount: messages?.length, 
+      model,
+      hasApiKey: !!apiKey 
+    });
+
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'messages 배열이 필요합니다' });
+    }
+
+    // Set API key in environment temporarily for this request
+    if (apiKey) {
+      process.env.GEMINI_API_KEY = apiKey;
+    }
+    if (model) {
+      process.env.GEMINI_MODEL = model;
+    }
+
+    // Extract last user message
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
+    const userText = lastUserMessage?.content || '';
+
+    console.log('[API] User text:', userText);
+
+    // Get AI response
+    const response = await getAiResponse(null, userText);
+    
+    console.log('[API] AI response:', response);
+
+    res.json({ text: response, success: true });
+
+  } catch (error) {
+    console.error('[API] LLM generate error:', error);
+    res.status(500).json({ 
+      error: 'LLM 응답 생성 실패', 
+      message: error.message 
+    });
+  }
+});
+
+// LLM 스트리밍 엔드포인트
+app.post('/api/llm/stream', async (req, res) => {
+  try {
+    const { messages, model, apiKey } = req.body;
+    
+    console.log('[API] LLM stream request:', { 
+      messageCount: messages?.length, 
+      model,
+      hasApiKey: !!apiKey 
+    });
+
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'messages 배열이 필요합니다' });
+    }
+
+    // Set API key in environment temporarily for this request
+    if (apiKey) {
+      process.env.GEMINI_API_KEY = apiKey;
+    }
+    if (model) {
+      process.env.GEMINI_MODEL = model;
+    }
+
+    // Extract last user message
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
+    const userText = lastUserMessage?.content || '';
+
+    console.log('[API] User text (streaming):', userText);
+
+    // Set SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Stream AI response
+    try {
+      for await (const chunk of generateContentStream(userText, null)) {
+        const cleanChunk = String(chunk || '').replace(/^\[\d{4}-\d{2}-\d{2}T[^\]]+\]\s*/, '');
+        if (cleanChunk) {
+          res.write(`data: ${JSON.stringify({ text: cleanChunk })}\n\n`);
+        }
+      }
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (streamError) {
+      console.error('[API] Stream error:', streamError);
+      res.write(`data: ${JSON.stringify({ error: streamError.message })}\n\n`);
+      res.end();
+    }
+
+  } catch (error) {
+    console.error('[API] LLM stream error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'LLM 스트리밍 실패', 
+        message: error.message 
+      });
+    }
+  }
+});
+
+// STT 엔드포인트
+app.post('/api/stt/transcribe', upload.single('audio'), async (req, res) => {
+  try {
+    console.log('[API] STT transcribe request received');
+    
+    if (!req.file) {
+      return res.status(400).json({ error: '오디오 파일이 필요합니다' });
+    }
+
+    const apiKey = req.body.apiKey;
+    if (apiKey) {
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = apiKey;
+    }
+
+    console.log('[API] Audio file size:', req.file.size, 'bytes');
+    console.log('[API] Audio file type:', req.file.mimetype);
+
+    // Convert webm to wav if needed
+    const audioBuffer = req.file.buffer;
+    
+    // Call STT
+    const transcribedText = await audioToText(audioBuffer);
+    
+    console.log('[API] Transcribed text:', transcribedText);
+
+    res.json({ text: transcribedText, success: true });
+
+  } catch (error) {
+    console.error('[API] STT error:', error);
+    res.status(500).json({ 
+      error: 'STT 처리 실패',
+      message: error.message 
+    });
+  }
+});
+
+// TTS 엔드포인트
+app.post('/api/tts/synthesize', async (req, res) => {
+  try {
+    const { text, provider, apiKey, voice, model } = req.body;
+    
+    console.log('[API] TTS synthesize request:', { 
+      textLength: text?.length,
+      provider,
+      voice,
+      model
+    });
+
+    if (!text) {
+      return res.status(400).json({ error: '텍스트가 필요합니다' });
+    }
+
+    // Set API keys
+    if (apiKey) {
+      if (provider === 'gemini') {
+        process.env.GEMINI_API_KEY = apiKey;
+      } else if (provider === 'fishaudio') {
+        process.env.FISH_AUDIO_API_KEY = apiKey;
+      }
+    }
+
+    // Set TTS provider and voice
+    if (provider) {
+      process.env.TTS_PROVIDER = provider;
+    }
+    if (voice) {
+      process.env.GEMINI_TTS_VOICE = voice;
+    }
+
+    // Synthesize
+    const audioFilePath = await synthChunkSync(text, 0);
+    
+    if (!audioFilePath || !fs.existsSync(audioFilePath)) {
+      throw new Error('TTS 생성 실패');
+    }
+
+    console.log('[API] TTS file generated:', audioFilePath);
+
+    // Read file and send as response
+    const audioData = fs.readFileSync(audioFilePath);
+    const ext = path.extname(audioFilePath).toLowerCase();
+    
+    let contentType = 'audio/mpeg';
+    if (ext === '.wav') contentType = 'audio/wav';
+    else if (ext === '.mp3') contentType = 'audio/mpeg';
+    else if (ext === '.ogg') contentType = 'audio/ogg';
+
+    res.setHeader('Content-Type', contentType);
+    res.send(audioData);
+
+    // Clean up temp file
+    setTimeout(() => {
+      try { fs.unlinkSync(audioFilePath); } catch (e) {}
+    }, 1000);
+
+  } catch (error) {
+    console.error('[API] TTS error:', error);
+    res.status(500).json({ 
+      error: 'TTS 처리 실패',
+      message: error.message 
+    });
+  }
 });
 
 // Fish Audio 모델 목록 조회 엔드포인트

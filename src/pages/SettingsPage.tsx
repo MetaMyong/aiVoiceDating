@@ -20,13 +20,16 @@ export default function SettingsPage(){
   const [fishError, setFishError] = useState('');
 
   const [promptBlocks, setPromptBlocks] = useState<any[]>([
-    { name: '시스템 프롬프트', type: 'pure', prompt: 'You are a helpful AI assistant.', role: 'user' },
-    { name: '대화 이력', type: 'conversation', prompt: '', role: 'user' },
-    { name: '사용자 입력', type: 'pure', prompt: '{user_input}', role: 'user' }
+    { id: 'block-sys-1', name: '시스템 프롬프트', type: 'pure', prompt: 'You are a helpful AI assistant.', role: 'user' },
+    { id: 'block-conv-2', name: '대화 이력', type: 'conversation', prompt: '', role: 'user' },
+    { id: 'block-input-3', name: '사용자 입력', type: 'pure', prompt: '{user_input}', role: 'user' }
   ]);
   const [promptRightTab, setPromptRightTab] = useState<'params'|'blocks'|'other'>('blocks');
-  const [expandedBlocks, setExpandedBlocks] = useState<Record<number,boolean>>({});
+  // Track expanded panels by block ID (stable across reorders)
+  const [expandedBlocks, setExpandedBlocks] = useState<Record<string,boolean>>({});
   const dragIndexRef = useRef<number|null>(null);
+  // Child-local prompt blocks reference for global Save
+  const promptLocalRef = useRef<any[] | null>(null);
 
   // audio
   useEffect(()=>{
@@ -35,7 +38,13 @@ export default function SettingsPage(){
         const s = await idbGetSettings();
         if(s){
           setCfg(s);
-          if(s.promptBlocks) setPromptBlocks(s.promptBlocks);
+          if(s.promptBlocks) {
+            // Ensure all blocks have IDs
+            const blocksWithIds = s.promptBlocks.map((b: any, i: number) => 
+              b.id ? b : { ...b, id: `block-${Date.now()}-${i}` }
+            );
+            setPromptBlocks(blocksWithIds);
+          }
         }
         try{ const fm = await idbGetFishModels(); if(fm) setFishModels(fm); }catch(e){}
       }catch(e){ console.warn('load settings failed', e); }
@@ -46,7 +55,11 @@ export default function SettingsPage(){
 
   async function saveCfg(){
     try{
-      await idbSetSettings(cfg);
+  // Persist latest child-local edits if available
+  const effectiveBlocks = promptLocalRef.current ?? promptBlocks;
+  // Sync parent state to latest before save
+  setPromptBlocks(effectiveBlocks);
+  await idbSetSettings({ ...cfg, promptBlocks: effectiveBlocks });
       await idbSetFishModels(fishModels || []);
       setStatus('설정이 로컬에 저장되었습니다');
       pushToast('설정이 저장되었습니다','success');
@@ -66,6 +79,7 @@ export default function SettingsPage(){
         expandedBlocks={expandedBlocks}
         setExpandedBlocks={setExpandedBlocks}
         dragIndexRef={dragIndexRef}
+  promptLocalRef={promptLocalRef}
       />
     )
   }
@@ -122,21 +136,21 @@ export default function SettingsPage(){
             <div className="flex gap-1 mb-0 justify-start">
               {leftSection === 'audio' ? (
                 <>
-                  <button type="button" className={`px-3 py-2 ${audioTab==='record'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`} onClick={()=>setAudioTab('record')}>녹음</button>
-                  <button type="button" className={`px-3 py-2 ${audioTab==='play'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`} onClick={()=>setAudioTab('play')}>재생</button>
+                  <button type="button" className={`px-3 py-2 rounded ${audioTab==='record'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`} onClick={()=>setAudioTab('record')}>녹음</button>
+                  <button type="button" className={`px-3 py-2 rounded ${audioTab==='play'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`} onClick={()=>setAudioTab('play')}>재생</button>
                 </>
               ) : leftSection === 'model' ? (
                 <>
-                  <button onClick={()=>setTab('llm')} className={`px-3 py-2 ${tab==='llm'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`}>LLM</button>
-                  <button onClick={()=>setTab('stt')} className={`px-3 py-2 ${tab==='stt'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`}>STT</button>
-                  <button onClick={()=>setTab('tts')} className={`px-3 py-2 ${tab==='tts'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`}>TTS</button>
-                  <button onClick={()=>setTab('api')} className={`px-3 py-2 ${tab==='api'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`}>API</button>
+                  <button onClick={()=>setTab('llm')} className={`px-3 py-2 rounded ${tab==='llm'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`}>LLM</button>
+                  <button onClick={()=>setTab('stt')} className={`px-3 py-2 rounded ${tab==='stt'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`}>STT</button>
+                  <button onClick={()=>setTab('tts')} className={`px-3 py-2 rounded ${tab==='tts'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`}>TTS</button>
+                  <button onClick={()=>setTab('api')} className={`px-3 py-2 rounded ${tab==='api'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`}>API</button>
                 </>
               ) : leftSection === 'prompt' ? (
                 <>
-                  <button onClick={()=>setPromptRightTab('params')} className={`px-3 py-2 ${promptRightTab==='params'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`}>파라미터</button>
-                  <button onClick={()=>setPromptRightTab('blocks')} className={`px-3 py-2 ${promptRightTab==='blocks'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`}>프롬프트 블록</button>
-                  <button onClick={()=>setPromptRightTab('other')} className={`px-3 py-2 ${promptRightTab==='other'?'bg-gray-100 text-gray-800 font-bold':'bg-orange-500 text-white font-bold'}`}>기타</button>
+                  <button onClick={()=>setPromptRightTab('params')} className={`px-3 py-2 rounded ${promptRightTab==='params'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`}>파라미터</button>
+                  <button onClick={()=>setPromptRightTab('blocks')} className={`px-3 py-2 rounded ${promptRightTab==='blocks'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`}>프롬프트 블록</button>
+                  <button onClick={()=>setPromptRightTab('other')} className={`px-3 py-2 rounded ${promptRightTab==='other'?'bg-orange-500 text-white font-bold':'bg-white text-gray-700 border border-gray-300'}`}>기타</button>
                 </>
               ) : null}
             </div>

@@ -40,3 +40,5 @@ export const setFishModels = async (v:any) => await dbSet('fishModels', v);
 // Conversations stored as arrays under key `conversations::<id>`
 export const getConversation = async (id:string) => (await dbGet(`conversations::${id}`)) || [];
 export const setConversation = async (id:string, v:any[]) => await dbSet(`conversations::${id}`, v || []);
+export const getConversationHistory = async (id:string) => await getConversation(id);
+export const saveConversationHistory = async (id:string, v:any[]) => await setConversation(id, v);
