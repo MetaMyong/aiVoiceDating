@@ -46,6 +46,23 @@ export default function Chat(){
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  const [displayedSentences, setDisplayedSentences] = useState<string[]>([]); // For TTS-synced display
+  const [isStreamingOrTTS, setIsStreamingOrTTS] = useState(false); // Track if streaming or TTS is active
+  const [currentTypingSentence, setCurrentTypingSentence] = useState(''); // Currently typing sentence
+  const [completedSentencesForDisplay, setCompletedSentencesForDisplay] = useState<string[]>([]); // Completed sentences
+  const [ttsActiveMessageIndex, setTtsActiveMessageIndex] = useState<number | null>(null); // Index of message being TTS'd
+  
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    messageIndex: number;
+  } | null>(null);
+  
+  // Edit mode state
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editText, setEditText] = useState('');
   
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -137,11 +154,17 @@ export default function Chat(){
     }
   }
 
-  // Enqueue text for TTS with strict order guarantee
-  function enqueueTTSOrdered(text: string) {
+  // Enqueue text for TTS with strict order guarantee and display sync
+  function enqueueTTSOrdered(text: string, shouldDisplay = true) {
     const seq = ttsSeqRef.current++;
     const item: TTSItem = { seq, ready: false, url: '' };
     ttsQueueRef.current.push(item);
+    
+    // Display text immediately when sentence is complete (add to pending list)
+    if (shouldDisplay) {
+      setDisplayedSentences(prev => [...prev, text]);
+    }
+    
     // Kick off synthesis asynchronously; when ready, attempt to play if it's next
     synthesizeTTS(text).then((url) => {
       item.url = url;
@@ -153,6 +176,29 @@ export default function Chat(){
       item.ready = true;
       attemptPlayNextOrdered();
     });
+  }
+
+  // Animate typing effect for current sentence
+  function animateTyping(text: string, duration: number): NodeJS.Timeout {
+    const chars = text.split('');
+    const interval = Math.max(20, duration / chars.length); // At least 20ms per char
+    let currentIndex = 0;
+    
+    // Start with empty, then incrementally build up
+    setCurrentTypingSentence('');
+    
+    const timer = setInterval(() => {
+      currentIndex++;
+      if (currentIndex <= chars.length) {
+        setCurrentTypingSentence(text.substring(0, currentIndex));
+      }
+      
+      if (currentIndex >= chars.length) {
+        clearInterval(timer);
+      }
+    }, interval);
+    
+    return timer;
   }
 
   // Attempt to play the next item strictly in order
@@ -168,6 +214,13 @@ export default function Chat(){
       // remove the item and advance sequence
       ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
       ttsNextSeqToPlayRef.current = nextSeq + 1;
+      
+      // Move to completed without animation
+      const sentenceToComplete = displayedSentences[nextSeq];
+      if (sentenceToComplete) {
+        setCompletedSentencesForDisplay(prev => [...prev, sentenceToComplete]);
+      }
+      
       // try subsequent one
       return void attemptPlayNextOrdered();
     }
@@ -176,13 +229,67 @@ export default function Chat(){
     const audioUrl = nextItem.url;
     const audio = new Audio(audioUrl);
     audioRef.current = audio;
+    
+    // Get the sentence for this sequence
+    const currentSentence = displayedSentences[nextSeq] || '';
+    let typingTimer: NodeJS.Timeout | null = null;
+    
+    // Clear previous typing animation
+    setCurrentTypingSentence('');
+    if (nextSeq === 0) {
+      // First TTS sentence - clear streaming text now
+      setStreamingText('');
+    }
+    
+    // Start typing animation immediately when audio starts playing
+    const startTypingAnimation = () => {
+      // Use a default duration, will be updated when metadata loads
+      const estimatedDuration = 2000; // 2 seconds default
+      console.log('[Chat] Starting typing animation immediately');
+      typingTimer = animateTyping(currentSentence, estimatedDuration);
+    };
+    
+    // Try to update animation speed when metadata is available
+    const updateAnimationSpeed = () => {
+      const actualDuration = audio.duration > 0 ? audio.duration * 1000 : 2000;
+      console.log('[Chat] Audio duration loaded:', { duration: actualDuration, chars: currentSentence.length });
+      
+      // Restart animation with correct duration
+      if (typingTimer) clearInterval(typingTimer);
+      typingTimer = animateTyping(currentSentence, actualDuration);
+    };
+    
+    // Start animation immediately (don't wait for metadata)
+    startTypingAnimation();
+    
+    // Update speed when metadata loads
+    if (audio.readyState < 1) {
+      audio.addEventListener('loadedmetadata', updateAnimationSpeed, { once: true });
+    }
+    
     audio.onended = () => {
+      if (typingTimer) clearInterval(typingTimer);
       URL.revokeObjectURL(audioUrl);
       audioRef.current = null;
       ttsPlayingRef.current = false;
+      
+      // Move completed sentence to completed list
+      setCompletedSentencesForDisplay(prev => [...prev, currentSentence]);
+      setCurrentTypingSentence('');
+      
+      // No need to update message.text - it already has full text
+      
       // remove the played item and advance sequence
       ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
       ttsNextSeqToPlayRef.current = nextSeq + 1;
+      
+      // Check if all TTS is done
+      if (ttsQueueRef.current.length === 0) {
+        setIsStreamingOrTTS(false); // All TTS completed
+        setTtsActiveMessageIndex(null); // Clear active TTS message to show full text normally
+        setCompletedSentencesForDisplay([]); // Reset for next message
+      }
+      
       setTimeout(() => attemptPlayNextOrdered(), 150);
     };
     audio.play().then(() => {
@@ -196,6 +303,88 @@ export default function Chat(){
       setTimeout(() => attemptPlayNextOrdered(), 150);
     });
   }
+
+  // Delete message
+  async function deleteMessage(index: number) {
+    const updatedMessages = messages.filter((_, i) => i !== index);
+    setMessages(updatedMessages);
+    await saveConversationHistory('default', updatedMessages);
+    setContextMenu(null);
+  }
+
+  // Start editing message
+  function startEditMessage(index: number) {
+    setEditingIndex(index);
+    setEditText(messages[index].text);
+    setContextMenu(null);
+  }
+
+  // Save edited message
+  async function saveEditMessage() {
+    if (editingIndex === null) return;
+    
+    const updatedMessages = [...messages];
+    updatedMessages[editingIndex] = {
+      ...updatedMessages[editingIndex],
+      text: editText
+    };
+    
+    setMessages(updatedMessages);
+    await saveConversationHistory('default', updatedMessages);
+    setEditingIndex(null);
+    setEditText('');
+  }
+
+  // Cancel editing
+  function cancelEdit() {
+    setEditingIndex(null);
+    setEditText('');
+  }
+
+  // Handle context menu (right-click or long-press)
+  function handleContextMenu(e: React.MouseEvent, index: number) {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      messageIndex: index
+    });
+  }
+
+  // Handle long-press for mobile
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  function handleTouchStart(e: React.TouchEvent, index: number) {
+    longPressTimerRef.current = setTimeout(() => {
+      const touch = e.touches[0];
+      setContextMenu({
+        visible: true,
+        x: touch.clientX,
+        y: touch.clientY,
+        messageIndex: index
+      });
+    }, 500); // 500ms long press
+  }
+
+  function handleTouchEnd() {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    function handleClickOutside() {
+      setContextMenu(null);
+    }
+    
+    if (contextMenu?.visible) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    }
+  }, [contextMenu]);
 
   // Send message to LLM
   async function sendMessage(text: string) {
@@ -214,6 +403,13 @@ export default function Chat(){
     setInputText('');
     setIsLoading(true);
     setStreamingText('');
+    setIsStreamingOrTTS(true); // Start streaming/TTS session
+    
+    // Reset TTS-related state immediately for new message
+    setTtsActiveMessageIndex(null);
+    setDisplayedSentences([]);
+    setCompletedSentencesForDisplay([]);
+    setCurrentTypingSentence('');
 
     try {
       // Get settings
@@ -277,7 +473,9 @@ export default function Chat(){
       ttsQueueRef.current = [];
       ttsSeqRef.current = 0;
       ttsNextSeqToPlayRef.current = 0;
+      setDisplayedSentences([]); // Reset displayed sentences for new response
       let sentenceBuffer = '';
+      const completedSentences: string[] = [];
 
       if (reader) {
         let sseBuffer = '';
@@ -299,14 +497,18 @@ export default function Chat(){
               const text = parsed?.text ?? parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (text) {
                 accumulatedText += text;
-                setStreamingText(accumulatedText);
+                // DON'T show streaming text on screen - keep it hidden
+                // setStreamingText(accumulatedText); // REMOVED
                 console.log('[Chat] Stream chunk:', text);
 
                 // Buffer into sentences and enqueue complete ones
                 sentenceBuffer += text;
                 const { sentences, remainder } = splitIntoSentencesIncremental(sentenceBuffer);
                 sentenceBuffer = remainder;
-                for (const s of sentences) enqueueTTSOrdered(s);
+                for (const s of sentences) {
+                  completedSentences.push(s);
+                  enqueueTTSOrdered(s);
+                }
               }
             } catch {
               // ignore JSON parse errors for partial frames
@@ -318,20 +520,26 @@ export default function Chat(){
 
       // Flush any remaining buffered text as a final sentence
       if (sentenceBuffer.trim()) {
+        completedSentences.push(sentenceBuffer.trim());
         enqueueTTSOrdered(sentenceBuffer.trim());
       }
 
       console.log('[Chat] Full streamed text:', accumulatedText);
 
+      // Streaming is done, now prepare for TTS
+      setIsLoading(false); // Stop showing streaming indicator
+      setStreamingText(''); // Clear any streaming text (should already be empty)
+      
       const assistantMessage: Message = {
         role: 'assistant',
-        text: accumulatedText || 'No response',
+        text: accumulatedText, // Store full text immediately
         timestamp: new Date().toISOString()
       };
 
+      // Add message to UI immediately after streaming completes
       const updatedMessages = [...newMessages, assistantMessage];
       setMessages(updatedMessages);
-      setStreamingText('');
+      setTtsActiveMessageIndex(updatedMessages.length - 1); // Mark this message as active for TTS animation
       
       // Save conversation history
       await saveConversationHistory('default', updatedMessages);
@@ -348,7 +556,7 @@ export default function Chat(){
       };
       setMessages([...newMessages, errorMessage]);
       setStreamingText('');
-    } finally {
+      setIsStreamingOrTTS(false);
       setIsLoading(false);
     }
   }
@@ -433,27 +641,123 @@ export default function Chat(){
   }
 
   return (
-    <main className="chat min-h-[60vh] flex flex-col">
-      <div className="messages flex-1 p-4 overflow-auto">
+    <main className="chat min-h-[60vh] flex flex-col bg-gray-50">
+      <div className="messages flex-1 p-4 overflow-auto space-y-3">
         {messages.map((msg, idx) => (
-          <div key={idx} className={`msg ${msg.role === 'user' ? 'user' : 'bot'}`}>
-            {msg.text}
+          <div 
+            key={idx} 
+            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            onContextMenu={(e) => handleContextMenu(e, idx)}
+            onTouchStart={(e) => handleTouchStart(e, idx)}
+            onTouchEnd={handleTouchEnd}
+          >
+            {editingIndex === idx ? (
+              <div className="w-[90%] mx-auto bg-white rounded-lg shadow-md p-4 border-2 border-blue-400">
+                <textarea
+                  className="w-full p-3 border rounded resize-none"
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  rows={5}
+                  autoFocus
+                />
+                <div className="flex gap-2 mt-3">
+                  <button
+                    onClick={saveEditMessage}
+                    className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                  >
+                    저장
+                  </button>
+                  <button
+                    onClick={cancelEdit}
+                    className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+                  >
+                    취소
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div 
+                className={`max-w-[70%] rounded-2xl px-4 py-2 shadow-sm ${
+                  msg.role === 'user' 
+                    ? 'bg-yellow-300 text-gray-900' 
+                    : 'bg-white text-gray-900 border border-gray-200'
+                }`}
+              >
+                <div className="whitespace-pre-wrap break-words">
+                  {/* Show TTS typing animation if this is the active TTS message */}
+                  {ttsActiveMessageIndex === idx && msg.role === 'assistant' ? (
+                    <>
+                      {/* Only show completed sentences and currently typing sentence */}
+                      {completedSentencesForDisplay.length === 0 && !currentTypingSentence ? (
+                        // TTS hasn't started yet - show loading indicator
+                        <span className="animate-pulse">TTS 준비 중...</span>
+                      ) : (
+                        <>
+                          {completedSentencesForDisplay.join(' ')}
+                          {completedSentencesForDisplay.length > 0 && currentTypingSentence && ' '}
+                          {currentTypingSentence}
+                        </>
+                      )}
+                      {/* DO NOT show remaining unread text - keep it hidden until TTS plays it */}
+                    </>
+                  ) : (
+                    msg.text
+                  )}
+                </div>
+                <div className="text-xs opacity-60 mt-1">
+                  {new Date(msg.timestamp).toLocaleTimeString('ko-KR', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         ))}
-        {streamingText && (
-          <div className="msg bot">
-            {streamingText}
-            <span className="animate-pulse ml-1">▋</span>
-          </div>
-        )}
-        {isLoading && !streamingText && (
-          <div className="msg bot">
-            <span className="animate-pulse">응답 생성 중...</span>
-          </div>
-        )}
+        
+        {/* DO NOT show streaming text - it should never appear on screen */}
+        {/* streamingText display completely removed */}
+        
         <div ref={messagesEndRef} />
       </div>
-      <footer className="composer flex items-center gap-2 p-4">
+      
+      {/* Context Menu */}
+      {contextMenu?.visible && (
+        <div
+          className="fixed bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50"
+          style={{ 
+            left: `${contextMenu.x}px`, 
+            top: `${contextMenu.y}px`,
+            minWidth: '140px'
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => startEditMessage(contextMenu.messageIndex)}
+            className="w-full px-4 py-2 text-left hover:bg-gray-100 text-sm flex items-center gap-2"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            편집
+          </button>
+          <button
+            onClick={() => deleteMessage(contextMenu.messageIndex)}
+            className="w-full px-4 py-2 text-left hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              <line x1="10" y1="11" x2="10" y2="17"/>
+              <line x1="14" y1="11" x2="14" y2="17"/>
+            </svg>
+            삭제
+          </button>
+        </div>
+      )}
+      
+      <footer className="composer flex items-center gap-2 p-4 bg-white border-t">
         <button onClick={toggleMic} aria-pressed={listening} title="Toggle microphone" className={`w-10 h-10 rounded-lg bg-white shadow-lg border flex items-center justify-center ${listening ? 'ring-2 ring-red-300' : ''}`}>
           {listening ? (
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="10" height="10" rx="3" fill="currentColor" /></svg>
