@@ -248,10 +248,19 @@ export default function Chat(){
       try {
         const settings = await getSettings();
         const sinkId = (settings as any)?.selectedOutputId;
+        console.log('[Chat] TTS attempting to set output device:', { sinkId, hasSinkIdSupport: typeof (audio as any).setSinkId === 'function' });
         if (sinkId && typeof (audio as any).setSinkId === 'function') {
           await (audio as any).setSinkId(sinkId);
+          console.log('[Chat] TTS successfully set output device to:', sinkId);
+        } else if (!sinkId) {
+          console.log('[Chat] No output device selected, using default');
+        } else {
+          console.warn('[Chat] setSinkId not supported by browser');
         }
-      } catch (_) { /* ignore sink errors */ }
+      } catch (e) { 
+        console.error('[Chat] setSinkId failed:', e);
+        // Don't fail playback if setSinkId fails, just use default output
+      }
       try {
         await audio.play();
         console.log('[Chat] TTS playing:', currentSentence);
