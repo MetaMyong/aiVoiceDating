@@ -68,9 +68,13 @@ export default function ModelSettings(props:any){
                 <div className="md:col-span-3 text-sm font-semibold" style={{width:'12rem'}}>FishAudio 모델</div>
                 <div className="md:col-span-9">
                   <div className="flex items-center gap-3">
-                    <select className="flex-1 rounded border px-3 py-2" value={cfg.fishAudioModelId||''} onChange={e=>setCfg({...cfg, fishAudioModelId:e.target.value})}>
+                    <select 
+                      className="flex-1 rounded border px-3 py-2" 
+                      value={cfg.fishAudioModelId || (fishModels && fishModels.length > 0 ? (fishModels[0].id || fishModels[0].modelId) : '')} 
+                      onChange={e=>setCfg({...cfg, fishAudioModelId:e.target.value})}
+                    >
                       {(fishModels || []).length === 0 ? (
-                        <option value="">모델 없음</option>
+                        <option value="">모델 없음 (API 키 설정 후 새로고침)</option>
                       ) : (
                         (fishModels || []).map((m:any)=>(<option key={m.id||m.modelId} value={m.id||m.modelId}>{m.name||m.id||m.modelId}</option>))
                       )}
@@ -120,6 +124,11 @@ export default function ModelSettings(props:any){
                         const models = parsed.models || parsed || [];
                         setFishModels(models);
                         try{ await idbSetFishModels(models); }catch(e){ console.error('idb set fish', e); }
+                        // Auto-select first model if none selected
+                        if (models.length > 0 && !cfg.fishAudioModelId) {
+                          const firstModelId = models[0].id || models[0].modelId;
+                          setCfg({...cfg, fishAudioModelId: firstModelId});
+                        }
                         pushToast('FishAudio 모델 로드 완료','success');
                       }catch(err:any){
                         const msg = err?.name === 'AbortError' ? '요청 타임아웃 (10s)' : (err?.message || '모델 로드 실패');

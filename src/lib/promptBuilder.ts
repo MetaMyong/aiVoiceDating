@@ -5,12 +5,15 @@ import { dbGet } from './indexeddb';
 // convId: optional conversation id (string) to load history from conversations/<id>.json on server side via API —
 // in this frontend-only helper we'll accept a history array passed in by caller.
 
-export type PromptBlock = { name:string, type: 'pure'|'conversation'|'persona'|'character'|'longterm', prompt:string, role: 'user'|'assistant', count?: number, startIndex?: number, endIndex?: number };
+export type PromptBlock = { name:string, type: 'pure'|'conversation'|'persona'|'character'|'longterm'|'system', prompt:string, role: 'user'|'assistant'|'system', count?: number, startIndex?: number, endIndex?: number };
 
 export function buildPromptMessages(blocks: PromptBlock[], conversationHistory: Array<any> = []) {
   const messages: Array<{ role: string, content: string }> = [];
   for (const b of blocks) {
-    if (b.type === 'pure') {
+    if (b.type === 'system') {
+      // System prompt type - always use system role
+      messages.push({ role: 'system', content: b.prompt });
+    } else if (b.type === 'pure') {
       messages.push({ role: b.role, content: b.prompt });
     } else if (b.type === 'conversation') {
       // If startIndex/endIndex provided, use them as slice bounds (inclusive start, inclusive end)

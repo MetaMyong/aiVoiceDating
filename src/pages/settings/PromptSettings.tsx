@@ -4,9 +4,9 @@ import { setSettings as idbSetSettings } from '../../lib/indexeddb'
 export type PromptBlock = {
   id: string
   name: string
-  type: 'pure' | 'conversation' | 'persona' | 'character' | 'longterm'
+  type: 'pure' | 'conversation' | 'persona' | 'character' | 'longterm' | 'system'
   prompt?: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   startIndex?: number
   endIndex?: number
   count?: number
@@ -21,8 +21,8 @@ export default function PromptSettings(props: any){
   // keep latest localBlocks for beforeunload/debounce
   const localBlocksRef = React.useRef<PromptBlock[]>([])
   React.useEffect(() => { localBlocksRef.current = localBlocks }, [localBlocks])
-  // debounce timer for edit saves
-  const editSaveTimerRef = React.useRef<number | null>(null)
+  // track edit state to suppress autosave while typing
+  const isEditingRef = React.useRef(false)
 
   React.useEffect(() => {
     if (promptLocalRef) {
@@ -69,15 +69,18 @@ export default function PromptSettings(props: any){
       const target = arr[index]
       if (!target) return prev
       arr[index] = { ...target, ...patch } as PromptBlock
-      // debounced auto-save for edits
-      if (editSaveTimerRef.current) window.clearTimeout(editSaveTimerRef.current)
-      // @ts-ignore browser timeout id
-      editSaveTimerRef.current = window.setTimeout(() => {
-        autoSave(arr)
-      }, 500)
+      // mark editing; do NOT autosave here
+      isEditingRef.current = true
       return arr
     })
   }
+
+  const commitEdits = React.useCallback(() => {
+    const blocks = localBlocksRef.current
+    if (!blocks) return
+    isEditingRef.current = false
+    autoSave(blocks)
+  }, [autoSave])
 
   const removeBlockSmart = (id: string, index: number) => {
     setLocalBlocks((prev) => {
@@ -131,13 +134,25 @@ export default function PromptSettings(props: any){
               +
             </button>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-3" onMouseDown={(e) => {
+            // Prevent parent drag when clicking inside expanded block content
+            const target = e.target as HTMLElement;
+            if (target.closest('textarea') || target.closest('input') || target.closest('select')) {
+              e.stopPropagation();
+            }
+          }}>
             {localBlocks.map((b: PromptBlock, i: number) => (
               <div
                 key={b.id}
                 className="border rounded bg-gray-50"
                 draggable
                 onDragStart={(e) => {
+                  // Prevent drag if user is selecting text
+                  const target = e.target as HTMLElement;
+                  if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+                    e.preventDefault();
+                    return;
+                  }
                   dragIndexRef.current = i
                   e.dataTransfer!.effectAllowed = 'move'
                 }}
@@ -163,7 +178,13 @@ export default function PromptSettings(props: any){
               >
                 <div
                   className="flex items-center justify-between px-3 py-2 cursor-pointer"
-                  onClick={() => setExpandedBlocks((x: any) => ({ ...x, [b.id]: !x[b.id] }))}
+                  onMouseDown={(e) => {
+                    // Commit edits before the click changes focus/selection
+                    if (isEditingRef.current) commitEdits()
+                  }}
+                  onClick={() => {
+                    setExpandedBlocks((x: any) => ({ ...x, [b.id]: !x[b.id] }))
+                  }}
                 >
                   <div className="flex items-center gap-3">
                     <div className="text-sm font-medium">{b.name || '(이름 없음)'}</div>
@@ -186,7 +207,11 @@ export default function PromptSettings(props: any){
                   </div>
                 </div>
                 {expandedBlocks[b.id] && (
-                  <div className="p-3 border-t bg-white">
+                  <div 
+                    className="p-3 border-t bg-white"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onDragStart={(e) => e.preventDefault()}
+                  >
                     <div className="mb-2">
                       <label className="block text-xs text-gray-600" htmlFor={`block-name-${b.id}`}>이름 (설명용)</label>
                       <input
@@ -197,6 +222,9 @@ export default function PromptSettings(props: any){
                         onChange={(e) => {
                           updateBlockField(i, { name: e.target.value })
                         }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onDragStart={(e) => e.preventDefault()}
+                        // avoid blur-then-click swallowing first click; save via header mousedown
                       />
                     </div>
                     <div className="mb-2 grid grid-cols-2 gap-2">
@@ -211,11 +239,17 @@ export default function PromptSettings(props: any){
                             const val = e.target.value as PromptBlock['type']
                             if (val === 'conversation') {
                               updateBlockField(i, { type: 'conversation', prompt: '', name: '대화 이력', role: 'user', count: 10 })
+                            } else if (val === 'system') {
+                              updateBlockField(i, { type: 'system', name: '시스템 프롬프트', role: 'system' })
                             } else {
                               updateBlockField(i, { type: val })
                             }
                           }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onDragStart={(e) => e.preventDefault()}
+                          // save via header mousedown
                         >
+                          <option value="system">시스템 프롬프트</option>
                           <option value="pure">순수 프롬프트</option>
                           <option value="conversation">대화</option>
                           <option value="persona">페르소나 프롬프트</option>
@@ -231,9 +265,13 @@ export default function PromptSettings(props: any){
                           className="w-full rounded border px-2 py-1"
                           value={b.role}
                           onChange={(e) => {
-                            updateBlockField(i, { role: e.target.value as 'user' | 'assistant' })
+                            updateBlockField(i, { role: e.target.value as 'user' | 'assistant' | 'system' })
                           }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onDragStart={(e) => e.preventDefault()}
+                          // save via header mousedown
                         >
+                          <option value="system">system</option>
                           <option value="user">user</option>
                           <option value="assistant">assistant</option>
                         </select>
@@ -255,6 +293,9 @@ export default function PromptSettings(props: any){
                                 const v = Math.max(0, Number(e.target.value) || 0)
                                 updateBlockField(i, { startIndex: v })
                               }}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onDragStart={(e) => e.preventDefault()}
+                              // save via header mousedown
                             />
                           </div>
                           <div>
@@ -270,6 +311,9 @@ export default function PromptSettings(props: any){
                                 const v = Math.max(0, Number(e.target.value) || 0)
                                 updateBlockField(i, { endIndex: v })
                               }}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onDragStart={(e) => e.preventDefault()}
+                              // save via header mousedown
                             />
                           </div>
                         </div>
@@ -287,6 +331,9 @@ export default function PromptSettings(props: any){
                           onChange={(e) => {
                             updateBlockField(i, { prompt: e.target.value })
                           }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onDragStart={(e) => e.preventDefault()}
+                          // save via header mousedown
                         />
                       </div>
                     )}
@@ -297,7 +344,179 @@ export default function PromptSettings(props: any){
           </div>
         </section>
       )}
-      {promptRightTab === 'params' && (<div className="text-sm text-gray-500">파라미터 편집은 추후 구현됩니다.</div>)}
+      {promptRightTab === 'params' && (
+        <section className="bg-white rounded shadow p-8">
+          <div className="text-sm text-gray-600 mb-4">LLM 생성 파라미터</div>
+          <div className="grid grid-cols-1 gap-4">
+            {/* 최대 콘텍스트 크기 */}
+            <div>
+              <label className="block text-xs text-gray-600 mb-1" htmlFor="max-context">
+                최대 콘텍스트 크기
+              </label>
+              <input
+                id="max-context"
+                name="max-context"
+                type="number"
+                min="1024"
+                max="1000000"
+                step="1024"
+                className="w-full rounded border px-3 py-2"
+                value={cfg.maxContextSize || 50000}
+                onChange={(e) => {
+                  const val = Math.max(1024, parseInt(e.target.value) || 50000);
+                  setCfg({ ...cfg, maxContextSize: val });
+                }}
+                placeholder="50000"
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                모델이 처리할 수 있는 최대 토큰 수 (기본값: 50000)
+              </div>
+            </div>
+
+            {/* 최대 응답 크기 */}
+            <div>
+              <label className="block text-xs text-gray-600 mb-1" htmlFor="max-output">
+                최대 응답 크기
+              </label>
+              <input
+                id="max-output"
+                name="max-output"
+                type="number"
+                min="128"
+                max="100000"
+                step="128"
+                className="w-full rounded border px-3 py-2"
+                value={cfg.maxOutputTokens || 8192}
+                onChange={(e) => {
+                  const val = Math.max(128, parseInt(e.target.value) || 8192);
+                  setCfg({ ...cfg, maxOutputTokens: val });
+                }}
+                placeholder="8192"
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                생성될 응답의 최대 토큰 수 (기본값: 8192)
+              </div>
+            </div>
+
+            {/* Thinking Tokens */}
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <input
+                  id="thinking-enabled"
+                  name="thinking-enabled"
+                  type="checkbox"
+                  checked={cfg.thinkingEnabled ?? true}
+                  onChange={(e) => {
+                    setCfg({ ...cfg, thinkingEnabled: e.target.checked });
+                  }}
+                  className="rounded"
+                />
+                <label className="text-xs text-gray-600" htmlFor="thinking-enabled">
+                  Thinking Tokens 사용
+                </label>
+              </div>
+              {cfg.thinkingEnabled !== false && (
+                <input
+                  id="thinking-tokens"
+                  name="thinking-tokens"
+                  type="number"
+                  min="0"
+                  max="50000"
+                  step="500"
+                  className="w-full rounded border px-3 py-2"
+                  value={cfg.thinkingTokens || 5000}
+                  onChange={(e) => {
+                    const val = Math.max(0, parseInt(e.target.value) || 5000);
+                    setCfg({ ...cfg, thinkingTokens: val });
+                  }}
+                  placeholder="5000"
+                />
+              )}
+              <div className="text-xs text-gray-500 mt-1">
+                모델의 내부 추론에 사용할 토큰 수 (기본값: 5000)
+              </div>
+            </div>
+
+            {/* 온도 (Temperature) */}
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <input
+                  id="temperature-enabled"
+                  name="temperature-enabled"
+                  type="checkbox"
+                  checked={cfg.temperatureEnabled ?? true}
+                  onChange={(e) => {
+                    setCfg({ ...cfg, temperatureEnabled: e.target.checked });
+                  }}
+                  className="rounded"
+                />
+                <label className="text-xs text-gray-600" htmlFor="temperature-enabled">
+                  온도 (Temperature) 사용
+                </label>
+              </div>
+              {cfg.temperatureEnabled !== false && (
+                <input
+                  id="temperature"
+                  name="temperature"
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.01"
+                  className="w-full rounded border px-3 py-2"
+                  value={cfg.temperature ?? 1.0}
+                  onChange={(e) => {
+                    const val = Math.max(0, Math.min(2, parseFloat(e.target.value) || 1.0));
+                    setCfg({ ...cfg, temperature: val });
+                  }}
+                  placeholder="1.0"
+                />
+              )}
+              <div className="text-xs text-gray-500 mt-1">
+                응답의 창의성 조절 (0.0~2.0, 기본값: 1.0)
+              </div>
+            </div>
+
+            {/* Top P */}
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <input
+                  id="top-p-enabled"
+                  name="top-p-enabled"
+                  type="checkbox"
+                  checked={cfg.topPEnabled ?? true}
+                  onChange={(e) => {
+                    setCfg({ ...cfg, topPEnabled: e.target.checked });
+                  }}
+                  className="rounded"
+                />
+                <label className="text-xs text-gray-600" htmlFor="top-p-enabled">
+                  Top P 사용
+                </label>
+              </div>
+              {cfg.topPEnabled !== false && (
+                <input
+                  id="top-p"
+                  name="top-p"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  className="w-full rounded border px-3 py-2"
+                  value={cfg.topP ?? 0.95}
+                  onChange={(e) => {
+                    const val = Math.max(0, Math.min(1, parseFloat(e.target.value) || 0.95));
+                    setCfg({ ...cfg, topP: val });
+                  }}
+                  placeholder="0.95"
+                />
+              )}
+              <div className="text-xs text-gray-500 mt-1">
+                누적 확률 임계값 (0.0~1.0, 기본값: 0.95)
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
       {promptRightTab === 'other' && (<div className="text-sm text-gray-500">내보내기/가져오기는 추후 구현됩니다.</div>)}
     </div>
   )

@@ -32,8 +32,9 @@ function getModelName() {
 }
 
 // System prompt to prepend before conversation history for all request paths
+// NOTE: This fallback is DEPRECATED. Use 'system' type blocks in promptBlocks instead.
 function getSystemPrompt() {
-  return (process.env.SYSTEM_INSTRUCTION || CONFIG.systemInstruction) || "당신은 사용자의 여자친구입니다. 다정하고 사랑스러운 반말로 응답해주세요. 이모티콘이나 마크다운을 사용하지 말고, 1~2 문장의 짧은 한국어로 응답해주세요.";
+  return (process.env.SYSTEM_INSTRUCTION || CONFIG.systemInstruction) || "";
 }
 
 // In-memory conversation history (append-only). Each item: { role: 'user'|'assistant', text: string }
@@ -71,22 +72,52 @@ async function* streamFromGeminiSSE(promptOrHistory) {
     throw new Error('GEMINI_API_KEY not set for SSE streaming');
   }
 
+  // Parse generation config from environment
+  let generationConfig = {};
+  try {
+    const gcStr = process.env.GENERATION_CONFIG;
+    if (gcStr) {
+      generationConfig = JSON.parse(gcStr);
+    }
+  } catch (e) {
+    console.warn('[LLM] Failed to parse GENERATION_CONFIG', e.message);
+  }
+
   let jsonBody;
   if (Array.isArray(promptOrHistory)) {
-    jsonBody = {
-  systemInstruction: { parts: [ { text: SYSTEM_PROMPT } ] },
-      contents: [ { role: 'model', parts: [ { text: SYSTEM_PROMPT } ] } ].concat(
-        promptOrHistory.map(entry => ({
-          role: entry.role === 'assistant' ? 'model' : 'user',
-          parts: [ { text: `[${entry.ts || new Date().toISOString()}] ${entry.text}` } ]
-        }))
-      )
-    };
+    // Two supported array shapes:
+    // 1) conversation history: [{ role: 'user'|'assistant', text, ts? }]
+    // 2) explicit messages:    [{ role: 'system'|'user'|'assistant', content }]
+    if (promptOrHistory.length && Object.prototype.hasOwnProperty.call(promptOrHistory[0], 'content')) {
+      const incoming = promptOrHistory;
+      const systemTexts = incoming.filter(m => m.role === 'system').map(m => String(m.content || '')).filter(Boolean);
+      const contents = incoming.filter(m => m.role !== 'system').map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [ { text: String(m.content || '') } ]
+      }));
+      jsonBody = {
+        ...(systemTexts.length ? { systemInstruction: { parts: [ { text: systemTexts.join('\n') } ] } } : {}),
+        contents,
+        generationConfig
+      };
+    } else {
+      jsonBody = {
+        systemInstruction: { parts: [ { text: SYSTEM_PROMPT } ] },
+        contents: [ { role: 'model', parts: [ { text: SYSTEM_PROMPT } ] } ].concat(
+          promptOrHistory.map(entry => ({
+            role: entry.role === 'assistant' ? 'model' : 'user',
+            parts: [ { text: `[${entry.ts || new Date().toISOString()}] ${entry.text}` } ]
+          }))
+        ),
+        generationConfig
+      };
+    }
   } else {
     const ts = new Date().toISOString();
     jsonBody = {
-  systemInstruction: { parts: [ { text: SYSTEM_PROMPT } ] },
-      contents: [ { role: 'model', parts: [ { text: SYSTEM_PROMPT } ] }, { role: 'user', parts: [ { text: `[${ts}] ${String(promptOrHistory)}` } ] } ]
+      systemInstruction: { parts: [ { text: SYSTEM_PROMPT } ] },
+      contents: [ { role: 'model', parts: [ { text: SYSTEM_PROMPT } ] }, { role: 'user', parts: [ { text: `[${ts}] ${String(promptOrHistory)}` } ] } ],
+      generationConfig
     };
   }
 
@@ -94,7 +125,13 @@ async function* streamFromGeminiSSE(promptOrHistory) {
     let lastUser = '';
     if (Array.isArray(promptOrHistory)) {
       for (let i = promptOrHistory.length - 1; i >= 0; i--) {
-        if (promptOrHistory[i] && promptOrHistory[i].role === 'user') { lastUser = promptOrHistory[i].text; break; }
+        const it = promptOrHistory[i];
+        if (!it) continue;
+        if (Object.prototype.hasOwnProperty.call(it, 'content')) {
+          if (it.role === 'user') { lastUser = it.content; break; }
+        } else if (it.role === 'user') {
+          lastUser = it.text; break;
+        }
       }
     } else {
       lastUser = String(promptOrHistory || '');
@@ -109,7 +146,13 @@ async function* streamFromGeminiSSE(promptOrHistory) {
   }
   if (!_fetch) throw new Error('fetch not available in this runtime');
 
-  const resp = await _fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(jsonBody) });
+  const resp = await _fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(jsonBody)
+  });
   if (!resp.ok) {
     const txt = await resp.text().catch(() => '[no body]');
     throw new Error(`SSE stream request failed: ${resp.status} ${txt}`);
@@ -128,21 +171,16 @@ async function* streamFromGeminiSSE(promptOrHistory) {
     for (const line of lines) {
       const prefix = 'data: ';
       if (!line.startsWith(prefix)) continue;
-      const jsonStr = line.slice(prefix.length).trim();
+      const jsonStr = line.slice(prefix.length);
       if (!jsonStr) continue;
       try {
         const parsed = JSON.parse(jsonStr);
-        const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text
-                  || parsed?.output?.[0]?.content?.[0]?.text
-                  || parsed?.delta?.content?.[0]?.text
-                  || parsed?.text
-                  || parsed?.message?.content?.text;
+        const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text) {
-          buffer = (buffer || '');
-          yield String(text);
+          yield text;
         }
       } catch (e) {
-        console.warn('Failed to parse SSE JSON chunk', e.message || e);
+        console.error('Error parsing stream JSON:', e);
       }
     }
   }
@@ -185,14 +223,20 @@ async function getAiResponse(guildId, userText) {
   return `AI 응답(자리표시자): ${userText}`;
 }
 
-async function* generateContentStream(promptText, convId) {
+async function* generateContentStream(promptOrMessages, convId) {
   ensureClients();
   const GEMINI_KEY = getGeminiKey();
   const MODEL_NAME = getModelName();
   const SYSTEM_PROMPT = getSystemPrompt();
   let userTs = new Date().toISOString();
-  try { CONVERSATION_HISTORY.push({ role: 'user', text: String(promptText), ts: userTs }); } catch (e) {}
-  try { console.log(`${now()}${COLOR_GREEN}[LLM][Request]${COLOR_RESET}`, `[${userTs}] ${String(promptText)}`); } catch(e) {}
+  let displayInput = '';
+  if (Array.isArray(promptOrMessages) && promptOrMessages.length && Object.prototype.hasOwnProperty.call(promptOrMessages[0], 'content')) {
+    // client provided explicit messages
+    displayInput = JSON.stringify(promptOrMessages);
+  } else {
+    displayInput = String(promptOrMessages || '');
+  }
+  try { console.log(`${now()}${COLOR_GREEN}[LLM][Request]${COLOR_RESET}`, `[${userTs}] ${displayInput}`); } catch(e) {}
   
   const LLM_SOURCE = GEMINI_KEY ? 'sse' : (genaiStreamClient ? 'stream' : 'fallback');
   try { console.log(`${now()}${COLOR_GREEN}[LLM][Source]${COLOR_RESET}`, LLM_SOURCE); } catch(e) {}
@@ -211,80 +255,35 @@ async function* generateContentStream(promptText, convId) {
 
   if (GEMINI_KEY) {
     try {
-      let buffer = '';
-      let flushTimer = null;
-      function scheduleFlush() {
-        if (flushTimer) clearTimeout(flushTimer);
-        flushTimer = setTimeout(() => {
-          try {
-            const partial = buffer.trim();
-            if (partial) {
-              console.log(`${now()}${COLOR_GREEN}[LLM][Response][partial]${COLOR_RESET}`, partial);
-              buffer = '';
-            }
-          } catch (e) {}
-        }, CHUNK_FLUSH_MS);
+      let inputForSSE = null;
+      if (Array.isArray(promptOrMessages) && promptOrMessages.length && Object.prototype.hasOwnProperty.call(promptOrMessages[0], 'content')) {
+        // Client provided explicit messages array - pass it directly to SSE
+        inputForSSE = promptOrMessages;
+      } else {
+        // legacy: use server-side conversation history
+        const apiHistory = Array.isArray(CONVERSATION_HISTORY) ? CONVERSATION_HISTORY.slice() : [];
+        try { CONVERSATION_HISTORY.push({ role: 'user', text: String(promptOrMessages), ts: userTs }); } catch (e) {}
+        if (preferGeminiTts) {
+          apiHistory.push({ role: 'user', text: 'Please output a single short tone directive at the very start of your reply followed by a colon, for example: "Say cheerfully:". After that, continue with the full assistant response on the following sentences. Keep the directive concise.' });
+        }
+        inputForSSE = apiHistory;
       }
-
-      const apiHistory = Array.isArray(CONVERSATION_HISTORY) ? CONVERSATION_HISTORY.slice() : [];
-      if (preferGeminiTts) {
-        apiHistory.push({ role: 'user', text: 'Please output a single short tone directive at the very start of your reply followed by a colon, for example: "Say cheerfully:". After that, continue with the full assistant response on the following sentences. Keep the directive concise.' });
-      }
-      const sseStream = streamFromGeminiSSE(apiHistory);
+      const sseStream = streamFromGeminiSSE(inputForSSE);
       let assistantAccum = '';
-      let _timestampRemoved = false;
+      
+      // Stream chunks immediately without sentence buffering
       for await (const chunk of sseStream) {
         try { console.log(`${now()}${COLOR_GREEN}[LLM][ChunkRaw]${COLOR_RESET}`, typeof chunk === 'string' ? chunk : JSON.stringify(chunk)); } catch(e) {}
         const piece = String(chunk || '');
         if (!piece) continue;
-        buffer += piece;
         
-        if (!_timestampRemoved) {
-          if (buffer.startsWith('[')) {
-            const closeIdx = buffer.indexOf(']');
-            if (closeIdx === -1) {
-              continue;
-            }
-            buffer = buffer.slice(closeIdx + 1).replace(/^\s+/, '');
-            _timestampRemoved = true;
-          } else {
-            _timestampRemoved = true;
-          }
-        }
         console.log(`${now()}${COLOR_GREEN}[LLM][Chunk]${COLOR_RESET}`, piece.replace(/\s+/g, ' '));
-        scheduleFlush();
-
-        while (true) {
-          const m = buffer.match(/^([\s\S]*?[\.\!\?\n]+)\s*/);
-          if (m && m[1]) {
-            const sentence = m[1].trim();
-            buffer = buffer.slice(m[0].length);
-            const out = sentence.replace(/[`*_]{1,3}/g, '').trim();
-            if (out) {
-              if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-              const outTs = new Date().toISOString();
-              const yielded = `[${outTs}] ${out}`;
-              console.log(`${now()}${COLOR_GREEN}[LLM][Response]${COLOR_RESET}`, yielded);
-              assistantAccum += (assistantAccum ? ' ' : '') + out;
-              yield yielded;
-            }
-            continue;
-          }
-          break;
-        }
+        
+        // Yield chunk immediately - let client handle sentence splitting
+        assistantAccum += piece;
+        yield piece;
       }
-      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-      const rest = buffer.trim();
-      if (rest) {
-        const out = rest.replace(/[`*_]{1,3}/g, '').trim();
-        if (out) {
-          const outTs = new Date().toISOString();
-          const yielded = `[${outTs}] ${out}`;
-          console.log(`${now()}${COLOR_GREEN}[LLM][Response]${COLOR_RESET}`, yielded);
-          assistantAccum += (assistantAccum ? ' ' : '') + out;
-          yield yielded;
-        }
-      }
+      
       if (assistantAccum && assistantAccum.trim()) {
         try { CONVERSATION_HISTORY.push({ role: 'assistant', text: stripToneDirective(assistantAccum.trim()), ts: new Date().toISOString() }); } catch(e) {}
       }

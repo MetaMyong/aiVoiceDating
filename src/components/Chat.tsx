@@ -8,20 +8,55 @@ interface Message {
   timestamp: string;
 }
 
+// Incremental sentence splitter to buffer partial sentences across chunks
+function splitIntoSentencesIncremental(buffer: string): { sentences: string[]; remainder: string } {
+  const sentences: string[] = [];
+  const endPunctuations = new Set(['.', '!', '?', ',', '。', '！', '？', '…', '，', '、']);
+  const closers = new Set(['”', '’', '"', '\'', ')', ']', '】', '』', '〉', '》']);
+  let i = 0;
+  let start = 0;
+  const len = buffer.length;
+  while (i < len) {
+    const ch = buffer[i];
+    if (endPunctuations.has(ch)) {
+      // Avoid creating sentences that start with a comma or are comma-only due to chunk boundaries
+      if (ch === ',') {
+        const before = buffer.slice(start, i);
+        const hasWord = /[A-Za-z0-9\uAC00-\uD7A3]/.test(before);
+        if (!hasWord) { i++; continue; }
+      }
+      i++;
+      // consume immediate closers/spaces
+      while (i < len && (closers.has(buffer[i]) || /\s/.test(buffer[i]))) {
+        i++;
+      }
+      const sentence = buffer.slice(start, i).trim();
+      if (sentence) sentences.push(sentence);
+      start = i;
+    } else {
+      i++;
+    }
+  }
+  return { sentences, remainder: buffer.slice(start) };
+}
+
 export default function Chat(){
   const [listening, setListening] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
-  const [useStreaming, setUseStreaming] = useState(true);
   
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const ttsQueueRef = useRef<string[]>([]);
+  // TTS: preserve strict order using sequence numbers
+  interface TTSItem { seq: number; ready: boolean; url: string }
+  const ttsQueueRef = useRef<TTSItem[]>([]);
+  const ttsSeqRef = useRef(0); // sequence to assign to next item
+  const ttsNextSeqToPlayRef = useRef(0); // next sequence expected to play
   const ttsPlayingRef = useRef(false);
 
   // Load conversation history on mount
@@ -43,9 +78,13 @@ export default function Chat(){
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
-  // Play TTS for assistant message
-  async function playTTS(text: string) {
+  // Synthesize a TTS audio URL immediately (non-blocking playback)
+  async function synthesizeTTS(text: string): Promise<string> {
     try {
+      // Pre-process text: remove trailing punctuation to prevent TTS model from adding unwanted continuation
+      const cleanedText = text.replace(/[,.!~?]+$/g, '').trim();
+      if (!cleanedText) return '';
+
       const settings = await getSettings();
       const provider = settings?.ttsProvider || 'gemini';
       
@@ -62,53 +101,99 @@ export default function Chat(){
       const voice = settings?.geminiTtsVoiceName || 'Zephyr';
       const model = settings?.geminiTtsModel;
 
-      console.log('[Chat] TTS request:', { provider, voice, fishModelId, textLength: text.length });
+      console.log('[Chat] TTS request:', { provider, voice: provider === 'gemini' ? voice : undefined, fishModelId: provider === 'fishaudio' ? fishModelId : undefined, textLength: text.length });
+
+      const requestBody: any = { 
+        text: cleanedText, 
+        provider, 
+        apiKey
+      };
+
+      // Add provider-specific parameters
+      if (provider === 'gemini') {
+        requestBody.voice = voice;
+        if (model) requestBody.model = model;
+      } else if (provider === 'fishaudio') {
+        requestBody.fishModelId = fishModelId;
+      }
 
       const response = await fetch('/api/tts/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          text, 
-          provider, 
-          apiKey,
-          voice,
-          model,
-          fishModelId
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (response.ok) {
         const audioBlob = await response.blob();
         const audioUrl = URL.createObjectURL(audioBlob);
-        
-        // Do not interrupt currently playing audio; new audio will play after ended
-        const audio = new Audio(audioUrl);
-        audioRef.current = audio;
-        audio.onended = () => {
-          URL.revokeObjectURL(audioUrl);
-          audioRef.current = null;
-          // 150ms gap then continue next
-          setTimeout(() => playNextFromQueue(), 150);
-        };
-
-        await audio.play();
-        console.log('[Chat] TTS playing');
+        return audioUrl;
       } else {
         console.error('[Chat] TTS error:', response.status);
+        return '';
       }
     } catch (error) {
       console.error('[Chat] TTS playback error:', error);
+      return '';
     }
   }
 
-  // Play from shared queue
-  function playNextFromQueue(){
+  // Enqueue text for TTS with strict order guarantee
+  function enqueueTTSOrdered(text: string) {
+    const seq = ttsSeqRef.current++;
+    const item: TTSItem = { seq, ready: false, url: '' };
+    ttsQueueRef.current.push(item);
+    // Kick off synthesis asynchronously; when ready, attempt to play if it's next
+    synthesizeTTS(text).then((url) => {
+      item.url = url;
+      item.ready = true;
+      attemptPlayNextOrdered();
+    }).catch(() => {
+      // mark as ready but no URL, we'll skip but keep order
+      item.url = '';
+      item.ready = true;
+      attemptPlayNextOrdered();
+    });
+  }
+
+  // Attempt to play the next item strictly in order
+  function attemptPlayNextOrdered(){
     if (ttsPlayingRef.current) return;
-    const next = ttsQueueRef.current.shift();
-    if (!next) return;
+    const nextSeq = ttsNextSeqToPlayRef.current;
+    const nextItem = ttsQueueRef.current.find(i => i.seq === nextSeq);
+    if (!nextItem) return; // not enqueued yet
+    if (!nextItem.ready) return; // wait until synthesized
+
+    // If synthesis failed, skip but advance order
+    if (!nextItem.url) {
+      // remove the item and advance sequence
+      ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
+      ttsNextSeqToPlayRef.current = nextSeq + 1;
+      // try subsequent one
+      return void attemptPlayNextOrdered();
+    }
+
     ttsPlayingRef.current = true;
-    playTTS(next).finally(() => {
+    const audioUrl = nextItem.url;
+    const audio = new Audio(audioUrl);
+    audioRef.current = audio;
+    audio.onended = () => {
+      URL.revokeObjectURL(audioUrl);
+      audioRef.current = null;
       ttsPlayingRef.current = false;
+      // remove the played item and advance sequence
+      ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
+      ttsNextSeqToPlayRef.current = nextSeq + 1;
+      setTimeout(() => attemptPlayNextOrdered(), 150);
+    };
+    audio.play().then(() => {
+      console.log('[Chat] TTS playing');
+    }).catch((e) => {
+      console.error('[Chat] Audio play error:', e);
+      // allow next; advance sequence even on play error
+      ttsPlayingRef.current = false;
+      ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
+      ttsNextSeqToPlayRef.current = nextSeq + 1;
+      setTimeout(() => attemptPlayNextOrdered(), 150);
     });
   }
 
@@ -154,114 +239,105 @@ export default function Chat(){
 
       console.log('[Chat] Built messages for LLM:', builtMessages);
 
-      if (useStreaming) {
-        // Use streaming API
-        const response = await fetch('/api/llm/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: builtMessages,
-            model: settings?.geminiModel || 'gemini-2.5-flash',
-            apiKey: settings?.geminiApiKey
-          })
-        });
+      // Prepare generation config from settings
+      const generationConfig: any = {};
+      if (settings?.maxContextSize) generationConfig.maxContextSize = settings.maxContextSize;
+      if (settings?.maxOutputTokens) generationConfig.maxOutputTokens = settings.maxOutputTokens;
+      if (settings?.thinkingEnabled !== false && settings?.thinkingTokens) {
+        generationConfig.thinkingTokens = settings.thinkingTokens;
+      }
+      if (settings?.temperatureEnabled !== false && settings?.temperature != null) {
+        generationConfig.temperature = settings.temperature;
+      }
+      if (settings?.topPEnabled !== false && settings?.topP != null) {
+        generationConfig.topP = settings.topP;
+      }
 
-        if (!response.ok) {
-          throw new Error(`LLM API error: ${response.status}`);
-        }
+      // Use streaming API (always enabled)
+      const response = await fetch('/api/llm/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: builtMessages,
+          model: settings?.geminiModel || 'gemini-2.5-flash',
+          apiKey: settings?.geminiApiKey,
+          generationConfig
+        })
+      });
 
-        // Read SSE stream with TTS queue
-  const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        let accumulatedText = '';
-  ttsQueueRef.current = [];
+      if (!response.ok) {
+        throw new Error(`LLM API error: ${response.status}`);
+      }
 
-        if (reader) {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+      // Read SSE stream with TTS queue
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedText = '';
+      // reset TTS ordered queue and sequence for a new response
+      ttsQueueRef.current = [];
+      ttsSeqRef.current = 0;
+      ttsNextSeqToPlayRef.current = 0;
+      let sentenceBuffer = '';
 
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n');
+      if (reader) {
+        let sseBuffer = '';
+        let doneStreaming = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const data = line.slice(6);
-                if (data === '[DONE]') {
-                  break;
-                }
-                try {
-                  const parsed = JSON.parse(data);
-                  if (parsed.text) {
-                    accumulatedText += parsed.text;
-                    setStreamingText(accumulatedText);
-                    console.log('[Chat] Stream chunk:', parsed.text);
-                    
-                    // Queue TTS for each chunk immediately
-                    ttsQueueRef.current.push(parsed.text);
-                    playNextFromQueue();
-                  }
-                } catch (e) {
-                  // Ignore parse errors
-                }
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6);
+            if (data === '[DONE]') { doneStreaming = true; break; }
+            try {
+              const parsed = JSON.parse(data);
+              const text = parsed?.text ?? parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (text) {
+                accumulatedText += text;
+                setStreamingText(accumulatedText);
+                console.log('[Chat] Stream chunk:', text);
+
+                // Buffer into sentences and enqueue complete ones
+                sentenceBuffer += text;
+                const { sentences, remainder } = splitIntoSentencesIncremental(sentenceBuffer);
+                sentenceBuffer = remainder;
+                for (const s of sentences) enqueueTTSOrdered(s);
               }
+            } catch {
+              // ignore JSON parse errors for partial frames
             }
           }
-        }
-
-        const assistantMessage: Message = {
-          role: 'assistant',
-          text: accumulatedText || 'No response',
-          timestamp: new Date().toISOString()
-        };
-
-        const updatedMessages = [...newMessages, assistantMessage];
-        setMessages(updatedMessages);
-        setStreamingText('');
-        
-        // Save conversation history
-        await saveConversationHistory('default', updatedMessages);
-        console.log('[Chat] Conversation saved');
-
-        // TTS already playing via queue, no need to call again here
-
-      } else {
-        // Use non-streaming API
-        const response = await fetch('/api/llm/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: builtMessages,
-            model: settings?.geminiModel || 'gemini-2.5-flash',
-            apiKey: settings?.geminiApiKey
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error(`LLM API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log('[Chat] LLM response:', data);
-
-        const assistantMessage: Message = {
-          role: 'assistant',
-          text: data.text || 'No response',
-          timestamp: new Date().toISOString()
-        };
-
-        const updatedMessages = [...newMessages, assistantMessage];
-        setMessages(updatedMessages);
-        
-        // Save conversation history
-        await saveConversationHistory('default', updatedMessages);
-        console.log('[Chat] Conversation saved');
-
-        // Play TTS
-        if (data.text) {
-          await playTTS(data.text);
+          if (doneStreaming) break;
         }
       }
+
+      // Flush any remaining buffered text as a final sentence
+      if (sentenceBuffer.trim()) {
+        enqueueTTSOrdered(sentenceBuffer.trim());
+      }
+
+      console.log('[Chat] Full streamed text:', accumulatedText);
+
+      const assistantMessage: Message = {
+        role: 'assistant',
+        text: accumulatedText || 'No response',
+        timestamp: new Date().toISOString()
+      };
+
+      const updatedMessages = [...newMessages, assistantMessage];
+      setMessages(updatedMessages);
+      setStreamingText('');
+      
+      // Save conversation history
+      await saveConversationHistory('default', updatedMessages);
+      console.log('[Chat] Conversation saved');
+
+      // TTS already playing via queue, no need to call again here
 
     } catch (error) {
       console.error('[Chat] Error sending message:', error);
@@ -378,15 +454,6 @@ export default function Chat(){
         <div ref={messagesEndRef} />
       </div>
       <footer className="composer flex items-center gap-2 p-4">
-        <button 
-          onClick={() => setUseStreaming(!useStreaming)} 
-          title={useStreaming ? '스트리밍 켜짐' : '스트리밍 꺼짐'}
-          className={`w-10 h-10 rounded-lg shadow-lg border flex items-center justify-center ${useStreaming ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 12a9 9 0 11-6.219-8.56" />
-          </svg>
-        </button>
         <button onClick={toggleMic} aria-pressed={listening} title="Toggle microphone" className={`w-10 h-10 rounded-lg bg-white shadow-lg border flex items-center justify-center ${listening ? 'ring-2 ring-red-300' : ''}`}>
           {listening ? (
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="10" height="10" rx="3" fill="currentColor" /></svg>
