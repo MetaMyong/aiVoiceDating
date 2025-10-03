@@ -173,34 +173,29 @@ app.post('/api/stt/transcribe', upload.single('audio'), async (req, res) => {
 // TTS 엔드포인트
 app.post('/api/tts/synthesize', async (req, res) => {
   try {
-    const { text, provider, apiKey, voice, model } = req.body;
+    const { text, provider, apiKey, voice, model, fishModelId } = req.body;
     
     console.log('[API] TTS synthesize request:', { 
       textLength: text?.length,
       provider,
       voice,
-      model
+      model,
+      fishModelId
     });
 
     if (!text) {
       return res.status(400).json({ error: '텍스트가 필요합니다' });
     }
 
-    // Set API keys
-    if (apiKey) {
-      if (provider === 'gemini') {
-        process.env.GEMINI_API_KEY = apiKey;
-      } else if (provider === 'fishaudio') {
-        process.env.FISH_AUDIO_API_KEY = apiKey;
-      }
-    }
-
-    // Set TTS provider and voice
-    if (provider) {
-      process.env.TTS_PROVIDER = provider;
-    }
-    if (voice) {
-      process.env.GEMINI_TTS_VOICE = voice;
+    // Set API keys and provider-specific settings
+    if (provider === 'gemini') {
+      if (apiKey) process.env.GEMINI_API_KEY = apiKey;
+      if (voice) process.env.GEMINI_TTS_VOICE = voice;
+      process.env.TTS_PROVIDER = 'gemini';
+    } else if (provider === 'fishaudio') {
+      if (apiKey) process.env.FISH_AUDIO_API_KEY = apiKey;
+      if (fishModelId) process.env.FISH_AUDIO_MODEL_ID = fishModelId;
+      process.env.TTS_PROVIDER = 'fishaudio';
     }
 
     // Synthesize

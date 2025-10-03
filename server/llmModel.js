@@ -24,34 +24,49 @@ function stripToneDirective(s) {
 
 // No on-disk config.json usage; prefer environment variables. CONFIG stays in-memory only.
 let CONFIG = {};
-const GEMINI_KEY = process.env.GEMINI_API_KEY || CONFIG.geminiApiKey;
-const MODEL_NAME = String(process.env.GEMINI_MODEL || CONFIG.geminiModel || 'gemini-2.5-flash');
+function getGeminiKey() {
+  return process.env.GEMINI_API_KEY || CONFIG.geminiApiKey || '';
+}
+function getModelName() {
+  return String(process.env.GEMINI_MODEL || CONFIG.geminiModel || 'gemini-2.5-flash');
+}
 
 // System prompt to prepend before conversation history for all request paths
-const SYSTEM_PROMPT = (process.env.SYSTEM_INSTRUCTION || CONFIG.systemInstruction) || "당신은 사용자의 여자친구입니다. 다정하고 사랑스러운 반말로 응답해주세요. 이모티콘이나 마크다운을 사용하지 말고, 1~2 문장의 짧은 한국어로 응답해주세요.";
+function getSystemPrompt() {
+  return (process.env.SYSTEM_INSTRUCTION || CONFIG.systemInstruction) || "당신은 사용자의 여자친구입니다. 다정하고 사랑스러운 반말로 응답해주세요. 이모티콘이나 마크다운을 사용하지 말고, 1~2 문장의 짧은 한국어로 응답해주세요.";
+}
 
 // In-memory conversation history (append-only). Each item: { role: 'user'|'assistant', text: string }
 const CONVERSATION_HISTORY = [];
 
 let genai = null;
 let genaiStreamClient = null;
-try {
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  if (GEMINI_KEY) genai = new GoogleGenerativeAI(GEMINI_KEY);
-} catch (e) {
-  genai = null;
-}
-// Prefer @google/genai streaming client if available
-try {
-  const { GoogleGenAI } = require('@google/genai');
-  genaiStreamClient = new GoogleGenAI({ apiKey: GEMINI_KEY });
-} catch (e) {
-  genaiStreamClient = null;
+let lastInitKey = null;
+function ensureClients() {
+  const key = getGeminiKey();
+  if (!key) { genai = null; genaiStreamClient = null; lastInitKey = null; return; }
+  if (lastInitKey === key && (genai || genaiStreamClient)) return;
+  lastInitKey = key;
+  try {
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    genai = new GoogleGenerativeAI(key);
+  } catch (e) {
+    genai = null;
+  }
+  try {
+    const { GoogleGenAI } = require('@google/genai');
+    genaiStreamClient = new GoogleGenAI({ apiKey: key });
+  } catch (e) {
+    genaiStreamClient = null;
+  }
 }
 
 // Helper: SSE streaming directly to Gemini REST endpoint using native fetch
 // promptOrHistory may be a string (single prompt) or an array (conversation history)
 async function* streamFromGeminiSSE(promptOrHistory) {
+  const GEMINI_KEY = getGeminiKey();
+  const MODEL_NAME = getModelName();
+  const SYSTEM_PROMPT = getSystemPrompt();
   if (!GEMINI_KEY) {
     throw new Error('GEMINI_API_KEY not set for SSE streaming');
   }
@@ -59,7 +74,7 @@ async function* streamFromGeminiSSE(promptOrHistory) {
   let jsonBody;
   if (Array.isArray(promptOrHistory)) {
     jsonBody = {
-      systemInstruction: { parts: [ { text: SYSTEM_PROMPT } ] },
+  systemInstruction: { parts: [ { text: SYSTEM_PROMPT } ] },
       contents: [ { role: 'model', parts: [ { text: SYSTEM_PROMPT } ] } ].concat(
         promptOrHistory.map(entry => ({
           role: entry.role === 'assistant' ? 'model' : 'user',
@@ -70,7 +85,7 @@ async function* streamFromGeminiSSE(promptOrHistory) {
   } else {
     const ts = new Date().toISOString();
     jsonBody = {
-      systemInstruction: { parts: [ { text: SYSTEM_PROMPT } ] },
+  systemInstruction: { parts: [ { text: SYSTEM_PROMPT } ] },
       contents: [ { role: 'model', parts: [ { text: SYSTEM_PROMPT } ] }, { role: 'user', parts: [ { text: `[${ts}] ${String(promptOrHistory)}` } ] } ]
     };
   }
@@ -134,6 +149,10 @@ async function* streamFromGeminiSSE(promptOrHistory) {
 }
 
 async function getAiResponse(guildId, userText) {
+  ensureClients();
+  const GEMINI_KEY = getGeminiKey();
+  const MODEL_NAME = getModelName();
+  const SYSTEM_PROMPT = getSystemPrompt();
   if (GEMINI_KEY || genaiStreamClient) {
     try {
       let reply = '';
@@ -167,6 +186,10 @@ async function getAiResponse(guildId, userText) {
 }
 
 async function* generateContentStream(promptText, convId) {
+  ensureClients();
+  const GEMINI_KEY = getGeminiKey();
+  const MODEL_NAME = getModelName();
+  const SYSTEM_PROMPT = getSystemPrompt();
   let userTs = new Date().toISOString();
   try { CONVERSATION_HISTORY.push({ role: 'user', text: String(promptText), ts: userTs }); } catch (e) {}
   try { console.log(`${now()}${COLOR_GREEN}[LLM][Request]${COLOR_RESET}`, `[${userTs}] ${String(promptText)}`); } catch(e) {}

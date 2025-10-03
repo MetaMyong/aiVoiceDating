@@ -22,7 +22,7 @@ export default function SettingsPage(){
   const [promptBlocks, setPromptBlocks] = useState<any[]>([
     { id: 'block-sys-1', name: '시스템 프롬프트', type: 'pure', prompt: 'You are a helpful AI assistant.', role: 'user' },
     { id: 'block-conv-2', name: '대화 이력', type: 'conversation', prompt: '', role: 'user' },
-    { id: 'block-input-3', name: '사용자 입력', type: 'pure', prompt: '{user_input}', role: 'user' }
+    { id: 'block-input-3', name: '사용자 입력', type: 'pure', prompt: '{{user_input}}', role: 'user' }
   ]);
   const [promptRightTab, setPromptRightTab] = useState<'params'|'blocks'|'other'>('blocks');
   // Track expanded panels by block ID (stable across reorders)

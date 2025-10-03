@@ -21,6 +21,8 @@ export default function Chat(){
   const audioChunksRef = useRef<Blob[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsQueueRef = useRef<string[]>([]);
+  const ttsPlayingRef = useRef(false);
 
   // Load conversation history on mount
   useEffect(() => {
@@ -46,34 +48,47 @@ export default function Chat(){
     try {
       const settings = await getSettings();
       const provider = settings?.ttsProvider || 'gemini';
-      const apiKey = settings?.geminiApiKey || settings?.fishAudioApiKey;
+      
+      // Use correct API key and model based on provider
+      let apiKey = '';
+      let fishModelId = '';
+      if (provider === 'fishaudio') {
+        apiKey = settings?.fishAudioApiKey || '';
+        fishModelId = settings?.fishAudioModelId || '';
+      } else {
+        apiKey = settings?.geminiApiKey || '';
+      }
+      
       const voice = settings?.geminiTtsVoiceName || 'Zephyr';
       const model = settings?.geminiTtsModel;
 
-      console.log('[Chat] TTS request:', { provider, voice, textLength: text.length });
+      console.log('[Chat] TTS request:', { provider, voice, fishModelId, textLength: text.length });
 
       const response = await fetch('/api/tts/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, provider, apiKey, voice, model })
+        body: JSON.stringify({ 
+          text, 
+          provider, 
+          apiKey,
+          voice,
+          model,
+          fishModelId
+        })
       });
 
       if (response.ok) {
         const audioBlob = await response.blob();
         const audioUrl = URL.createObjectURL(audioBlob);
         
-        // Stop previous audio if playing
-        if (audioRef.current) {
-          audioRef.current.pause();
-          audioRef.current = null;
-        }
-
+        // Do not interrupt currently playing audio; new audio will play after ended
         const audio = new Audio(audioUrl);
         audioRef.current = audio;
-        
         audio.onended = () => {
           URL.revokeObjectURL(audioUrl);
           audioRef.current = null;
+          // 150ms gap then continue next
+          setTimeout(() => playNextFromQueue(), 150);
         };
 
         await audio.play();
@@ -84,6 +99,17 @@ export default function Chat(){
     } catch (error) {
       console.error('[Chat] TTS playback error:', error);
     }
+  }
+
+  // Play from shared queue
+  function playNextFromQueue(){
+    if (ttsPlayingRef.current) return;
+    const next = ttsQueueRef.current.shift();
+    if (!next) return;
+    ttsPlayingRef.current = true;
+    playTTS(next).finally(() => {
+      ttsPlayingRef.current = false;
+    });
   }
 
   // Send message to LLM
@@ -113,16 +139,17 @@ export default function Chat(){
       const promptBlocks: PromptBlock[] = settings?.promptBlocks || [
         { name: '시스템 프롬프트', type: 'pure', prompt: 'You are a helpful AI assistant.', role: 'user' },
         { name: '대화 이력', type: 'conversation', prompt: '', role: 'user' },
-        { name: '사용자 입력', type: 'pure', prompt: '{user_input}', role: 'user' }
+        { name: '사용자 입력', type: 'pure', prompt: '{{user_input}}', role: 'user' }
       ];
 
-      // Build messages
-      let builtMessages = buildPromptMessages(promptBlocks, newMessages);
+      // Build messages from blocks WITHOUT adding user message at end
+      // (user input is already inserted via {{user_input}} placeholder)
+      let builtMessages = buildPromptMessages(promptBlocks, messages);
       
-      // Replace {user_input} placeholder with actual user input
+      // Replace {{user_input}} placeholder with actual user input
       builtMessages = builtMessages.map(msg => ({
         ...msg,
-        content: msg.content.replace('{user_input}', text.trim())
+        content: msg.content.replace(/\{\{user_input\}\}/g, text.trim())
       }));
 
       console.log('[Chat] Built messages for LLM:', builtMessages);
@@ -143,10 +170,11 @@ export default function Chat(){
           throw new Error(`LLM API error: ${response.status}`);
         }
 
-        // Read SSE stream
-        const reader = response.body?.getReader();
+        // Read SSE stream with TTS queue
+  const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let accumulatedText = '';
+  ttsQueueRef.current = [];
 
         if (reader) {
           while (true) {
@@ -168,6 +196,10 @@ export default function Chat(){
                     accumulatedText += parsed.text;
                     setStreamingText(accumulatedText);
                     console.log('[Chat] Stream chunk:', parsed.text);
+                    
+                    // Queue TTS for each chunk immediately
+                    ttsQueueRef.current.push(parsed.text);
+                    playNextFromQueue();
                   }
                 } catch (e) {
                   // Ignore parse errors
@@ -191,10 +223,7 @@ export default function Chat(){
         await saveConversationHistory('default', updatedMessages);
         console.log('[Chat] Conversation saved');
 
-        // Play TTS
-        if (accumulatedText) {
-          await playTTS(accumulatedText);
-        }
+        // TTS already playing via queue, no need to call again here
 
       } else {
         // Use non-streaming API

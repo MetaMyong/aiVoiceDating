@@ -120,9 +120,51 @@ function makeAudioResourceFromFile(fp) {
 async function synthChunkSync(textChunk, index = 0) {
   // Prefer environment variables over any in-memory CONFIG
   const preferred = (process.env.TTS_PROVIDER || CONFIG.ttsProvider || '').toString().toLowerCase();
+  const fishKey = process.env.FISH_AUDIO_API_KEY || CONFIG.fishAudioApiKey;
+  const fishModelId = process.env.FISH_AUDIO_MODEL_ID || CONFIG.fishAudioModelId;
+  
+  // Try FishAudio FIRST if provider is fishaudio and credentials exist
+  const preferFish = preferred === 'fishaudio' || preferred === 'fish';
+  if (preferFish && fishKey && fishModelId) {
+    try {
+      const url = `https://api.fish.audio/v1/tts`;
+      const requestBody = {
+        temperature: 0.7,
+        top_p: 0.7,
+        prosody: {},
+        chunk_length: 100,
+        normalize: false,
+        format: 'mp3',
+        mp3_bitrate: 128,
+        opus_bitrate: 32,
+        latency: 'balanced',
+        text: textChunk,
+        references: [],
+        reference_id: fishModelId
+      };
+      const axiosConfig = {
+        headers: {
+          Authorization: `Bearer ${fishKey}`,
+          'Content-Type': 'application/json',
+          model: CONFIG.fishAudioModelHeader || 's1'
+        },
+        responseType: 'arraybuffer'
+      };
+      console.log(`${nowDelta()}${COLOR_ORANGE}[FishAudio][Request][idx=${index}]${COLOR_RESET}`, requestBody);
+      const resp = await axios.post(url, requestBody, axiosConfig);
+      console.log(`${nowDelta()}[FishAudio][Response][idx=${index}] status=${resp.status} bytes=${resp.data ? resp.data.byteLength : 0}`);
+      const tmp = path.join(os.tmpdir(), `ai_date_tts_${Date.now()}_${Math.floor(Math.random()*10000)}.mp3`);
+      fs.writeFileSync(tmp, Buffer.from(resp.data));
+      return tmp;
+    } catch (e) {
+      console.warn('Fish Audio synth failed, falling back to Gemini TTS', e.response ? { status: e.response.status, data: e.response.data } : e.message || e);
+    }
+  }
+
+  // Try Gemini TTS if preferred or fallback
   const preferGemini = preferred === 'gemini' || preferred === 'gemini-tts';
   const GEMINI_KEY = process.env.GEMINI_API_KEY || CONFIG.geminiApiKey;
-  if (preferGemini && GEMINI_KEY) {
+  if ((preferGemini || !preferFish) && GEMINI_KEY) {
     try {
       const { GoogleGenAI } = require('@google/genai');
       const ai = new GoogleGenAI({ apiKey: GEMINI_KEY });
@@ -195,48 +237,6 @@ async function synthChunkSync(textChunk, index = 0) {
     }
   }
 
-  // Try Fish Audio REST next if configured
-  const fishKey = process.env.FISH_AUDIO_API_KEY || CONFIG.fishAudioApiKey;
-  const fishModelId = process.env.FISH_AUDIO_MODEL_ID || CONFIG.fishAudioModelId;
-  const preferGoogle = preferred === 'google' || preferred === 'gcloud' || preferred === 'g-tts';
-
-  // If user explicitly prefers Google, skip FishAudio even if fish config exists
-  if (!preferGoogle && fishKey && fishModelId) {
-    try {
-      const url = `https://api.fish.audio/v1/tts`;
-      const requestBody = {
-        temperature: 0.7,
-        top_p: 0.7,
-        prosody: {},
-        chunk_length: 100,
-        normalize: false,
-        format: 'mp3',
-        mp3_bitrate: 128,
-        opus_bitrate: 32,
-        latency: 'balanced',
-        text: textChunk,
-        references: [],
-        reference_id: fishModelId
-      };
-      const axiosConfig = {
-        headers: {
-          Authorization: `Bearer ${fishKey}`,
-          'Content-Type': 'application/json',
-          model: CONFIG.fishAudioModelHeader || 's1'
-        },
-        responseType: 'arraybuffer'
-      };
-  console.log(`${nowDelta()}${COLOR_ORANGE}[FishAudio][Request][idx=${index}]${COLOR_RESET}`, requestBody);
-    const resp = await axios.post(url, requestBody, axiosConfig);
-      console.log(`${nowDelta()}[FishAudio][Response][idx=${index}] status=${resp.status} bytes=${resp.data ? resp.data.byteLength : 0}`);
-      const tmp = path.join(os.tmpdir(), `ai_date_tts_${Date.now()}_${Math.floor(Math.random()*10000)}.mp3`);
-      fs.writeFileSync(tmp, Buffer.from(resp.data));
-      return tmp;
-    } catch (e) {
-      // Log more details to help debugging
-      console.warn('Fish Audio synth failed, falling back to Google TTS', e.response ? { status: e.response.status, data: e.response.data } : e.message || e);
-    }
-  }
   // Try Gemini TTS as fallback/default if configured
   const GEMINI_KEY_FALLBACK = process.env.GEMINI_API_KEY || CONFIG.geminiApiKey;
   if (GEMINI_KEY_FALLBACK) {
