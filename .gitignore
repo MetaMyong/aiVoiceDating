@@ -1,3 +1,8 @@
 node_modules/
 recordings/
 dist/
+backup_old_root/
+backup_old_frontend/
+*.log
+.env
+.DS_Store

@@ -1,5 +1,5 @@
-// main.js - 우아한 종료 적용된 엔트리 포인트
-const { startServer } = require('./server');
+// server/main.js - 서버 엔트리 포인트
+const { startServer } = require('./index');
 
 const PORT = process.env.PORT || 3000;
 
