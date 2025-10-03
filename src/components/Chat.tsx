@@ -46,11 +46,12 @@ export default function Chat(){
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
-  const [displayedSentences, setDisplayedSentences] = useState<string[]>([]); // For TTS-synced display
   const [isStreamingOrTTS, setIsStreamingOrTTS] = useState(false); // Track if streaming or TTS is active
   const [currentTypingSentence, setCurrentTypingSentence] = useState(''); // Currently typing sentence
   const [completedSentencesForDisplay, setCompletedSentencesForDisplay] = useState<string[]>([]); // Completed sentences
   const [ttsActiveMessageIndex, setTtsActiveMessageIndex] = useState<number | null>(null); // Index of message being TTS'd
+  // Typing animation lead time to run slightly faster than TTS (in ms)
+  const TYPING_LEAD_MS = 500;
   
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -70,7 +71,7 @@ export default function Chat(){
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // TTS: preserve strict order using sequence numbers
-  interface TTSItem { seq: number; ready: boolean; url: string }
+  interface TTSItem { seq: number; ready: boolean; url: string; text: string }
   const ttsQueueRef = useRef<TTSItem[]>([]);
   const ttsSeqRef = useRef(0); // sequence to assign to next item
   const ttsNextSeqToPlayRef = useRef(0); // next sequence expected to play
@@ -155,15 +156,10 @@ export default function Chat(){
   }
 
   // Enqueue text for TTS with strict order guarantee and display sync
-  function enqueueTTSOrdered(text: string, shouldDisplay = true) {
+  function enqueueTTSOrdered(text: string) {
     const seq = ttsSeqRef.current++;
-    const item: TTSItem = { seq, ready: false, url: '' };
+    const item: TTSItem = { seq, ready: false, url: '', text };
     ttsQueueRef.current.push(item);
-    
-    // Display text immediately when sentence is complete (add to pending list)
-    if (shouldDisplay) {
-      setDisplayedSentences(prev => [...prev, text]);
-    }
     
     // Kick off synthesis asynchronously; when ready, attempt to play if it's next
     synthesizeTTS(text).then((url) => {
@@ -179,7 +175,7 @@ export default function Chat(){
   }
 
   // Animate typing effect for current sentence
-  function animateTyping(text: string, duration: number): NodeJS.Timeout {
+  function animateTyping(text: string, duration: number, onComplete?: () => void): NodeJS.Timeout {
     const chars = text.split('');
     const interval = Math.max(20, duration / chars.length); // At least 20ms per char
     let currentIndex = 0;
@@ -195,6 +191,7 @@ export default function Chat(){
       
       if (currentIndex >= chars.length) {
         clearInterval(timer);
+        if (onComplete) onComplete();
       }
     }, interval);
     
@@ -216,7 +213,7 @@ export default function Chat(){
       ttsNextSeqToPlayRef.current = nextSeq + 1;
       
       // Move to completed without animation
-      const sentenceToComplete = displayedSentences[nextSeq];
+      const sentenceToComplete = nextItem.text;
       if (sentenceToComplete) {
         setCompletedSentencesForDisplay(prev => [...prev, sentenceToComplete]);
       }
@@ -231,7 +228,7 @@ export default function Chat(){
     audioRef.current = audio;
     
     // Get the sentence for this sequence
-    const currentSentence = displayedSentences[nextSeq] || '';
+    const currentSentence = nextItem.text || '';
     let typingTimer: NodeJS.Timeout | null = null;
     
     // Clear previous typing animation
@@ -241,43 +238,77 @@ export default function Chat(){
       setStreamingText('');
     }
     
-    // Start typing animation immediately when audio starts playing
-    const startTypingAnimation = () => {
-      // Use a default duration, will be updated when metadata loads
-      const estimatedDuration = 2000; // 2 seconds default
-      console.log('[Chat] Starting typing animation immediately');
-      typingTimer = animateTyping(currentSentence, estimatedDuration);
-    };
+    // Start typing animation IMMEDIATELY with estimated duration
+    const baselineEstimated = Math.max(2000, currentSentence.length * 50); // 50ms per char estimate
+    const estimatedDuration = Math.max(300, baselineEstimated - TYPING_LEAD_MS);
+    console.log('[Chat] Starting typing animation immediately:', { 
+      sentence: currentSentence, 
+      estimatedDuration,
+      baselineEstimated,
+      leadMs: TYPING_LEAD_MS,
+      chars: currentSentence.length 
+    });
     
-    // Try to update animation speed when metadata is available
-    const updateAnimationSpeed = () => {
-      const actualDuration = audio.duration > 0 ? audio.duration * 1000 : 2000;
-      console.log('[Chat] Audio duration loaded:', { duration: actualDuration, chars: currentSentence.length });
+    typingTimer = animateTyping(currentSentence, estimatedDuration, () => {
+      console.log('[Chat] Typing animation completed for sentence:', currentSentence);
+    });
+    
+    // Update typing speed when audio metadata is loaded (to get accurate duration)
+    const updateTypingSpeed = () => {
+      const audioMs = audio.duration > 0 ? audio.duration * 1000 : estimatedDuration + TYPING_LEAD_MS;
+      const adjustedDuration = Math.max(300, audioMs - TYPING_LEAD_MS);
+      console.log('[Chat] Audio metadata loaded, updating typing speed:', { 
+        audioMs,
+        adjustedDuration,
+        estimatedDuration,
+        leadMs: TYPING_LEAD_MS,
+        differenceFromEstimated: adjustedDuration - estimatedDuration
+      });
       
-      // Restart animation with correct duration
-      if (typingTimer) clearInterval(typingTimer);
-      typingTimer = animateTyping(currentSentence, actualDuration);
+      // Only restart if there's significant difference (more than 300ms)
+      if (Math.abs(adjustedDuration - estimatedDuration) > 300 && typingTimer) {
+        clearInterval(typingTimer);
+        typingTimer = animateTyping(currentSentence, adjustedDuration, () => {
+          console.log('[Chat] Typing animation completed for sentence:', currentSentence);
+        });
+      }
     };
     
-    // Start animation immediately (don't wait for metadata)
-    startTypingAnimation();
-    
-    // Update speed when metadata loads
-    if (audio.readyState < 1) {
-      audio.addEventListener('loadedmetadata', updateAnimationSpeed, { once: true });
+    // Listen for metadata loaded event to adjust speed
+    if (audio.readyState >= 1) {
+      // Metadata already loaded
+      updateTypingSpeed();
+    } else {
+      audio.addEventListener('loadedmetadata', updateTypingSpeed, { once: true });
     }
     
+    // Start playing audio immediately
+    audio.play().then(() => {
+      console.log('[Chat] TTS playing:', currentSentence);
+    }).catch((e) => {
+      console.error('[Chat] Audio play error:', e);
+      // Clean up on error
+      if (typingTimer) clearInterval(typingTimer);
+      ttsPlayingRef.current = false;
+      ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
+      ttsNextSeqToPlayRef.current = nextSeq + 1;
+      setCurrentTypingSentence('');
+  // Immediately attempt to play next to avoid any visual gap
+  attemptPlayNextOrdered();
+    });
+    
     audio.onended = () => {
+      console.log('[Chat] TTS ended:', currentSentence);
+      console.log('[Chat] Current state:', {
+        completedCount: completedSentencesForDisplay.length,
+        queueLength: ttsQueueRef.current.length,
+        nextSeq: ttsNextSeqToPlayRef.current + 1
+      });
+      
       if (typingTimer) clearInterval(typingTimer);
       URL.revokeObjectURL(audioUrl);
       audioRef.current = null;
       ttsPlayingRef.current = false;
-      
-      // Move completed sentence to completed list
-      setCompletedSentencesForDisplay(prev => [...prev, currentSentence]);
-      setCurrentTypingSentence('');
-      
-      // No need to update message.text - it already has full text
       
       // remove the played item and advance sequence
       ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
@@ -285,23 +316,24 @@ export default function Chat(){
       
       // Check if all TTS is done
       if (ttsQueueRef.current.length === 0) {
+        console.log('[Chat] All TTS completed');
         setIsStreamingOrTTS(false); // All TTS completed
         setTtsActiveMessageIndex(null); // Clear active TTS message to show full text normally
         setCompletedSentencesForDisplay([]); // Reset for next message
+        setCurrentTypingSentence('');
+      } else {
+        // Move current typing sentence to completed list ONLY if more TTS to play
+        setCompletedSentencesForDisplay(prev => {
+          const updated = [...prev, currentSentence];
+          console.log('[Chat] Updated completed sentences:', updated);
+          return updated;
+        });
+        setCurrentTypingSentence('');
       }
       
-      setTimeout(() => attemptPlayNextOrdered(), 150);
+  // Immediately attempt to play next to avoid any visual gap
+  attemptPlayNextOrdered();
     };
-    audio.play().then(() => {
-      console.log('[Chat] TTS playing');
-    }).catch((e) => {
-      console.error('[Chat] Audio play error:', e);
-      // allow next; advance sequence even on play error
-      ttsPlayingRef.current = false;
-      ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
-      ttsNextSeqToPlayRef.current = nextSeq + 1;
-      setTimeout(() => attemptPlayNextOrdered(), 150);
-    });
   }
 
   // Delete message
@@ -406,8 +438,7 @@ export default function Chat(){
     setIsStreamingOrTTS(true); // Start streaming/TTS session
     
     // Reset TTS-related state immediately for new message
-    setTtsActiveMessageIndex(null);
-    setDisplayedSentences([]);
+    setTtsActiveMessageIndex(null); // DON'T set to message index yet - wait for TTS to start
     setCompletedSentencesForDisplay([]);
     setCurrentTypingSentence('');
 
@@ -473,7 +504,6 @@ export default function Chat(){
       ttsQueueRef.current = [];
       ttsSeqRef.current = 0;
       ttsNextSeqToPlayRef.current = 0;
-      setDisplayedSentences([]); // Reset displayed sentences for new response
       let sentenceBuffer = '';
       const completedSentences: string[] = [];
 
@@ -526,24 +556,56 @@ export default function Chat(){
 
       console.log('[Chat] Full streamed text:', accumulatedText);
 
-      // Streaming is done, now prepare for TTS
-      setIsLoading(false); // Stop showing streaming indicator
-      setStreamingText(''); // Clear any streaming text (should already be empty)
+      // Streaming is done - save to messages but DON'T display yet
+      setIsLoading(false);
+      setStreamingText('');
       
       const assistantMessage: Message = {
         role: 'assistant',
-        text: accumulatedText, // Store full text immediately
+        text: accumulatedText,
         timestamp: new Date().toISOString()
       };
 
-      // Add message to UI immediately after streaming completes
+      // Save message but DON'T add to UI yet - wait for TTS to start
+      // Store in a ref so TTS can access it
       const updatedMessages = [...newMessages, assistantMessage];
-      setMessages(updatedMessages);
-      setTtsActiveMessageIndex(updatedMessages.length - 1); // Mark this message as active for TTS animation
       
-      // Save conversation history
+      // Save conversation history (but don't show in UI yet)
       await saveConversationHistory('default', updatedMessages);
-      console.log('[Chat] Conversation saved');
+      console.log('[Chat] Conversation saved, waiting for TTS to start before showing message');
+
+      // Messages will be added when first TTS starts playing
+      // Store the message index for later
+      const pendingMessageIndex = updatedMessages.length - 1;
+      
+      // Wait a bit for first TTS to be ready
+      const checkTTSReady = setInterval(() => {
+        if (ttsQueueRef.current.length > 0 && ttsQueueRef.current[0].ready) {
+          clearInterval(checkTTSReady);
+          // First TTS is ready, now add message to UI
+          setMessages(updatedMessages);
+          setTtsActiveMessageIndex(pendingMessageIndex);
+          console.log('[Chat] First TTS ready, showing message with index:', pendingMessageIndex);
+        }
+      }, 50);
+      
+      // Timeout after 10 seconds (increased from 5) - but NEVER clear TTS index if TTS is active
+      setTimeout(() => {
+        clearInterval(checkTTSReady);
+        // Force show message even if TTS not ready
+        if (messages.length < updatedMessages.length) {
+          setMessages(updatedMessages);
+          // ALWAYS keep TTS active if queue has items
+          if (ttsQueueRef.current.length > 0 || ttsPlayingRef.current) {
+            setTtsActiveMessageIndex(pendingMessageIndex);
+            console.log('[Chat] Timeout but TTS active, keeping index:', pendingMessageIndex);
+          } else {
+            // Only clear if truly no TTS happening
+            setTtsActiveMessageIndex(null);
+            console.log('[Chat] Timeout and no TTS, clearing index');
+          }
+        }
+      }, 10000);
 
       // TTS already playing via queue, no need to call again here
 
@@ -640,6 +702,8 @@ export default function Chat(){
     }
   }
 
+  // Note: typing view is only shown when this index matches
+
   return (
     <main className="chat min-h-[60vh] flex flex-col bg-gray-50">
       <div className="messages flex-1 p-4 overflow-auto space-y-3">
@@ -684,21 +748,12 @@ export default function Chat(){
                 }`}
               >
                 <div className="whitespace-pre-wrap break-words">
-                  {/* Show TTS typing animation if this is the active TTS message */}
-                  {ttsActiveMessageIndex === idx && msg.role === 'assistant' ? (
+                  {msg.role === 'assistant' && ttsActiveMessageIndex === idx ? (
                     <>
-                      {/* Only show completed sentences and currently typing sentence */}
-                      {completedSentencesForDisplay.length === 0 && !currentTypingSentence ? (
-                        // TTS hasn't started yet - show loading indicator
-                        <span className="animate-pulse">TTS 준비 중...</span>
-                      ) : (
-                        <>
-                          {completedSentencesForDisplay.join(' ')}
-                          {completedSentencesForDisplay.length > 0 && currentTypingSentence && ' '}
-                          {currentTypingSentence}
-                        </>
-                      )}
-                      {/* DO NOT show remaining unread text - keep it hidden until TTS plays it */}
+                      {completedSentencesForDisplay.length > 0 && completedSentencesForDisplay.join(' ')}
+                      {completedSentencesForDisplay.length > 0 && currentTypingSentence && ' '}
+                      {currentTypingSentence}
+                      {!currentTypingSentence && completedSentencesForDisplay.length === 0 && '\u200B'}
                     </>
                   ) : (
                     msg.text
@@ -781,7 +836,7 @@ export default function Chat(){
           title="Send message"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 012 2z" />
           </svg>
         </button>
       </footer>
