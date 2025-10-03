@@ -22,16 +22,38 @@ export default function AudioSettings(props:any){
   const gainRef = useRef<any|null>(null);
   const audioElRef = useRef<HTMLAudioElement|null>(null);
 
-  async function refreshDevices(){
+  // 장치 권한을 선요청하고 enumerateDevices를 호출합니다.
+  async function refreshDevices(forceRequestPermission:boolean=false){
     try{
       if(!(navigator && navigator.mediaDevices && navigator.mediaDevices.enumerateDevices)) return;
+      // 권한이 없거나 목록이 비는 경우를 대비하여, 필요 시 오디오 권한을 먼저 요청
+      if (forceRequestPermission || (inputDevices.length===0 && outputDevices.length===0)){
+        try{
+          const test = await navigator.mediaDevices.getUserMedia({ audio: true });
+          // 곧바로 정지해 리소스 낭비 방지
+          try{ test.getTracks().forEach(t=>t.stop()); }catch(_){/*noop*/}
+        }catch(err:any){
+          console.warn('getUserMedia for permission failed', err);
+          // 사용자 거부나 장치 없음일 수 있으므로 알림
+          if(err && (err.name==='NotAllowedError' || err.name==='SecurityError')){
+            pushToast('마이크 권한이 거부되었습니다. 브라우저 사이트 권한에서 마이크 허용 후 다시 시도하세요.','error');
+          }else if(err && err.name==='NotFoundError'){
+            pushToast('사용 가능한 마이크 장치를 찾을 수 없습니다. 연결 상태를 확인하세요.','error');
+          }
+        }
+      }
+
       const devices = await navigator.mediaDevices.enumerateDevices();
       const inputs = devices.filter(d=>d.kind==='audioinput');
       const outputs = devices.filter(d=>d.kind==='audiooutput');
       setInputDevices(inputs as MediaDeviceInfo[]);
       setOutputDevices(outputs as MediaDeviceInfo[]);
-      if(!selectedInputId && inputs.length>0){ setSelectedInputId(inputs[0].deviceId); }
-      if(!selectedOutputId && outputs.length>0){ setSelectedOutputId(outputs[0].deviceId); }
+
+      // 현재 선택된 장치가 목록에 없으면 자동 폴백
+      const inputExists = inputs.some(d=>d.deviceId===selectedInputId);
+      const outputExists = outputs.some(d=>d.deviceId===selectedOutputId);
+      if(!inputExists){ setSelectedInputId(inputs[0]?.deviceId || ''); }
+      if(!outputExists){ setSelectedOutputId(outputs[0]?.deviceId || ''); }
     }catch(e){ console.warn('refreshDevices failed', e); }
   }
 
@@ -46,8 +68,15 @@ export default function AudioSettings(props:any){
           if(typeof s.playbackVolume === 'number') setPlaybackVolume(s.playbackVolume);
         }
       }catch(e){ console.warn('load audio settings failed', e); }
-      try{ await refreshDevices(); }catch(e){}
+      try{ await refreshDevices(true); }catch(e){}
     })();
+  },[]);
+
+  // 장치 플러그/언플러그나 OS 변경에 반응하도록 devicechange 리스너 추가
+  useEffect(()=>{
+    const handler = ()=>{ refreshDevices(); };
+    try{ navigator?.mediaDevices?.addEventListener?.('devicechange', handler); }catch(_){/*noop*/}
+    return ()=>{ try{ navigator?.mediaDevices?.removeEventListener?.('devicechange', handler); }catch(_){/*noop*/} };
   },[]);
 
   useEffect(()=>{
@@ -60,14 +89,38 @@ export default function AudioSettings(props:any){
         const ac = new AudioCtx({ latencyHint: 'interactive' });
         audioCtxRef.current = ac;
 
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: selectedInputId ? { exact: selectedInputId } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false } as MediaTrackConstraints });
+        let stream: MediaStream | null = null;
+        try{
+          stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: selectedInputId ? { exact: selectedInputId } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false } as MediaTrackConstraints });
+        }catch(err:any){
+          // 선택된 장치가 사라진 경우 등 Overconstrained 에러 폴백
+          if(err && (err.name==='OverconstrainedError' || err.name==='NotFoundError')){
+            console.warn('Selected input not available, falling back to default device');
+            pushToast('선택한 녹음 장치를 찾을 수 없어 기본 장치로 전환합니다.','info');
+            try{ await refreshDevices(true); }catch(_){/*noop*/}
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // 기본으로 바뀐 deviceId를 다시 저장
+            try{
+              const newDevices = await navigator.mediaDevices.enumerateDevices();
+              const firstInput = newDevices.find(d=>d.kind==='audioinput');
+              if(firstInput){ setSelectedInputId(firstInput.deviceId); }
+            }catch(_){/*noop*/}
+          }else{
+            throw err;
+          }
+        }
+        if(!stream) return;
         const audioEl = audioElRef.current || document.createElement('audio');
         audioEl.autoplay = true; audioEl.muted = false;
         audioElRef.current = audioEl;
 
         try{ audioEl.srcObject = stream; audioEl.volume = playbackVolume; }catch(e){ console.warn('assign raw stream failed', e); }
         if(typeof (audioEl as any).setSinkId === 'function' && selectedOutputId){
-          try{ await (audioEl as any).setSinkId(selectedOutputId); }catch(e){ console.warn('setSinkId failed', e); }
+          try{ await (audioEl as any).setSinkId(selectedOutputId); }catch(e:any){
+            console.warn('setSinkId failed', e);
+            // 권한/정책 문제 안내
+            pushToast('스피커 선택에 실패했습니다. 브라우저가 출력 장치 변경을 지원하지 않거나, 보안 컨텍스트(HTTPS/localhost)가 아닐 수 있습니다.','info');
+          }
         }
 
         const src = ac.createMediaStreamSource(stream);
@@ -97,7 +150,14 @@ export default function AudioSettings(props:any){
           raf = requestAnimationFrame(tick);
         }
         tick();
-      }catch(e){ console.error('monitor start', e); }
+      }catch(e:any){
+        console.error('monitor start', e);
+        if(e && e.name==='NotAllowedError'){
+          pushToast('마이크 권한이 거부되었습니다. 브라우저 주소창의 권한 설정을 확인하세요.','error');
+        }else{
+          pushToast('오디오 모니터 시작에 실패했습니다. 콘솔 로그를 확인하세요.','error');
+        }
+      }
     }
     function stopMonitor(){
       try{ if(raf) cancelAnimationFrame(raf); }catch(e){}
@@ -141,7 +201,7 @@ export default function AudioSettings(props:any){
                   <select className="flex-1 rounded border px-3 py-2" value={selectedInputId} onChange={async e=>{ const v = e.target.value; setSelectedInputId(v); try{ await saveCfg(); }catch(_){}}}>
                     {inputDevices.length===0 ? <option>장치 없음</option> : inputDevices.map((d:any)=>(<option key={d.deviceId} value={d.deviceId}>{fmtDeviceLabel(d)}</option>))}
                   </select>
-                  <button type="button" className="px-3 py-2 bg-gray-200 rounded" onClick={refreshDevices}>새로고침</button>
+                  <button type="button" className="px-3 py-2 bg-gray-200 rounded" onClick={()=>refreshDevices(true)}>새로고침</button>
                 </div>
               </div>
               <div>

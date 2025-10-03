@@ -221,11 +221,9 @@ app.post('/api/stt/transcribe', upload.single('audio'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: '오디오 파일이 필요합니다' });
     }
-
-    const apiKey = req.body.apiKey;
-    if (apiKey) {
-      process.env.GOOGLE_APPLICATION_CREDENTIALS = apiKey;
-    }
+    // Frontend에서 서비스 계정 JSON을 전송 (googleServiceKey)
+    // 이전 병합에서 apiKey를 파일 경로로 오해하여 ENOENT 발생했음
+    const googleServiceKey = req.body.googleServiceKey;
 
     console.log('[API] Audio file size:', req.file.size, 'bytes');
     console.log('[API] Audio file type:', req.file.mimetype);
@@ -234,7 +232,7 @@ app.post('/api/stt/transcribe', upload.single('audio'), async (req, res) => {
     const audioBuffer = req.file.buffer;
     
     // Call STT
-    const transcribedText = await audioToText(audioBuffer);
+  const transcribedText = await audioToText(audioBuffer, googleServiceKey);
     
     console.log('[API] Transcribed text:', transcribedText);
 

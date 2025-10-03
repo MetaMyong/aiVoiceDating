@@ -68,6 +68,23 @@ export default function Chat(){
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  // VAD/WebAudio refs
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const vadRafRef = useRef<number | null>(null);
+  const voiceStartAtRef = useRef<number | null>(null);
+  const silenceStartAtRef = useRef<number | null>(null);
+  const utteranceStartAtRef = useRef<number | null>(null);
+  const isRecordingRef = useRef<boolean>(false);
+  const vadEnabledRef = useRef<boolean>(false);
+
+  // VAD tuning
+  const VAD_THRESHOLD = 0.015; // RMS threshold
+  const VOICE_START_MS = 150;   // min voice before starting utterance
+  const SILENCE_MS = 800;       // silence to end utterance
+  const MAX_UTTERANCE_MS = 15000; // safety cap
+  const MIN_BLOB_BYTES = 8000;  // ignore if recorded payload too small
+  const MIN_TEXT_CHARS = 2;     // ignore too short transcripts
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // TTS: preserve strict order using sequence numbers
@@ -623,71 +640,174 @@ export default function Chat(){
     }
   }
 
+  // Start a new utterance recording
+  function startUtteranceRecording() {
+    if (!streamRef.current || isRecordingRef.current) return;
+    audioChunksRef.current = [];
+    const rec = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm' });
+    mediaRecorderRef.current = rec;
+    isRecordingRef.current = true;
+    utteranceStartAtRef.current = performance.now();
+
+    rec.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
+    rec.onstop = async () => {
+      try {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const size = audioBlob.size || 0;
+        console.log('[Chat] Utterance recorded. size=', size);
+        // Ignore too small payloads
+        if (size < MIN_BLOB_BYTES) {
+          console.log('[Chat] Ignoring small utterance');
+          return;
+        }
+        // Send to STT
+        const settings = await getSettings();
+        const formData = new FormData();
+        formData.append('audio', audioBlob);
+        if (settings?.googleServiceKey) formData.append('googleServiceKey', settings.googleServiceKey);
+        const resp = await fetch('/api/stt/transcribe', { method: 'POST', body: formData });
+        if (resp.ok) {
+          const data = await resp.json();
+          let transcribedText: string = data.text || '';
+          if (transcribedText) transcribedText = transcribedText.trim();
+          console.log('[Chat] Transcribed text:', transcribedText);
+          const isTooShort = !transcribedText || transcribedText.replace(/[\s\p{P}\p{S}]/gu, '').length < MIN_TEXT_CHARS;
+          if (!isTooShort && transcribedText) {
+            await sendMessage(transcribedText);
+          } else {
+            console.log('[Chat] Ignoring empty/too short transcript');
+          }
+        } else {
+          console.error('[Chat] STT error:', resp.status);
+        }
+      } catch (err) {
+        console.error('[Chat] STT processing error:', err);
+      }
+    };
+    rec.start();
+    console.log('[Chat] Utterance recording started');
+  }
+
+  // Stop current utterance recording
+  function stopUtteranceRecording() {
+    if (!isRecordingRef.current) return;
+    try {
+      mediaRecorderRef.current?.stop();
+    } catch (e) {
+      console.warn('[Chat] Error stopping utterance recorder', e);
+    } finally {
+      isRecordingRef.current = false;
+      mediaRecorderRef.current = null;
+      utteranceStartAtRef.current = null;
+    }
+  }
+
+  function computeRms(analyser: AnalyserNode): number {
+    const bufferLength = analyser.fftSize;
+    const data = new Uint8Array(bufferLength);
+    analyser.getByteTimeDomainData(data);
+    let sumSquares = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      const v = (data[i] - 128) / 128; // -1..1
+      sumSquares += v * v;
+    }
+    return Math.sqrt(sumSquares / bufferLength);
+  }
+
+  function startVAD(stream: MediaStream) {
+    if (audioContextRef.current) return;
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.8;
+    source.connect(analyser);
+    audioContextRef.current = ctx;
+    analyserRef.current = analyser;
+    vadEnabledRef.current = true;
+    voiceStartAtRef.current = null;
+    silenceStartAtRef.current = null;
+    utteranceStartAtRef.current = null;
+
+    const loop = () => {
+      if (!vadEnabledRef.current || !analyserRef.current) return;
+      const now = performance.now();
+      const rms = computeRms(analyserRef.current);
+      const isLoud = rms >= VAD_THRESHOLD;
+
+      if (!isRecordingRef.current) {
+        // not recording - watch for sustained voice to start
+        if (isLoud) {
+          if (voiceStartAtRef.current == null) voiceStartAtRef.current = now;
+          if (now - (voiceStartAtRef.current || 0) >= VOICE_START_MS) {
+            startUtteranceRecording();
+            silenceStartAtRef.current = null;
+          }
+        } else {
+          voiceStartAtRef.current = null;
+        }
+      } else {
+        // recording - watch for silence to end or max duration
+        if (isLoud) {
+          silenceStartAtRef.current = null;
+        } else {
+          if (silenceStartAtRef.current == null) silenceStartAtRef.current = now;
+          if (now - (silenceStartAtRef.current || 0) >= SILENCE_MS) {
+            stopUtteranceRecording();
+          }
+        }
+        const startedAt = utteranceStartAtRef.current || now;
+        if (now - startedAt >= MAX_UTTERANCE_MS) {
+          console.log('[Chat] Max utterance duration reached');
+          stopUtteranceRecording();
+        }
+      }
+
+      vadRafRef.current = requestAnimationFrame(loop);
+    };
+    vadRafRef.current = requestAnimationFrame(loop);
+  }
+
+  function stopVAD() {
+    vadEnabledRef.current = false;
+    if (vadRafRef.current != null) {
+      cancelAnimationFrame(vadRafRef.current);
+      vadRafRef.current = null;
+    }
+    try { stopUtteranceRecording(); } catch {}
+    try { analyserRef.current?.disconnect(); } catch {}
+    try { audioContextRef.current?.close(); } catch {}
+    analyserRef.current = null;
+    audioContextRef.current = null;
+    voiceStartAtRef.current = null;
+    silenceStartAtRef.current = null;
+    utteranceStartAtRef.current = null;
+  }
+
   async function toggleMic(){
     if (!listening) {
       try {
         const s = await navigator.mediaDevices.getUserMedia({ audio: true });
         streamRef.current = s;
-        audioChunksRef.current = [];
-        
-        const mediaRecorder = new MediaRecorder(s);
-        mediaRecorderRef.current = mediaRecorder;
-
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data.size > 0) {
-            audioChunksRef.current.push(event.data);
-          }
-        };
-
-        mediaRecorder.onstop = async () => {
-          console.log('[Chat] Recording stopped, processing audio...');
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-          
-          // Send to STT
-          try {
-            const settings = await getSettings();
-            const formData = new FormData();
-            formData.append('audio', audioBlob);
-            formData.append('apiKey', settings?.geminiApiKey || '');
-
-            const response = await fetch('/api/stt/transcribe', {
-              method: 'POST',
-              body: formData
-            });
-
-            if (response.ok) {
-              const data = await response.json();
-              const transcribedText = data.text || '';
-              console.log('[Chat] Transcribed text:', transcribedText);
-              
-              if (transcribedText) {
-                await sendMessage(transcribedText);
-              }
-            } else {
-              console.error('[Chat] STT error:', response.status);
-            }
-          } catch (error) {
-            console.error('[Chat] STT processing error:', error);
-          }
-        };
-
-        mediaRecorder.start();
+        startVAD(s);
         setListening(true);
-        console.log('[Chat] Recording started');
+        console.log('[Chat] Mic listening (VAD) started');
       } catch (e) {
         console.error('[Chat] Mic access denied', e);
       }
     } else {
       try {
-        mediaRecorderRef.current?.stop();
+        stopVAD();
         streamRef.current?.getTracks().forEach(t => t.stop());
       } catch (e) {
-        console.error('[Chat] Error stopping recording', e);
+        console.error('[Chat] Error stopping mic/VAD', e);
       }
       streamRef.current = null;
       mediaRecorderRef.current = null;
       setListening(false);
-      console.log('[Chat] Recording stopped by user');
+      console.log('[Chat] Mic listening stopped');
     }
   }
 
