@@ -134,27 +134,18 @@ export default function PromptSettings(props: any){
               +
             </button>
           </div>
-          <div className="space-y-3" onMouseDown={(e) => {
-            // Prevent parent drag when clicking inside expanded block content
-            const target = e.target as HTMLElement;
-            if (target.closest('textarea') || target.closest('input') || target.closest('select')) {
-              e.stopPropagation();
-            }
-          }}>
+          <div className="space-y-3">
             {localBlocks.map((b: PromptBlock, i: number) => (
               <div
                 key={b.id}
                 className="border rounded bg-gray-50"
-                draggable
                 onDragStart={(e) => {
-                  // Prevent drag if user is selecting text
+                  // Only allow drag from the drag handle
                   const target = e.target as HTMLElement;
-                  if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+                  if (!target.closest('.drag-handle')) {
                     e.preventDefault();
                     return;
                   }
-                  dragIndexRef.current = i
-                  e.dataTransfer!.effectAllowed = 'move'
                 }}
                 onDragOver={(e) => {
                   e.preventDefault()
@@ -203,14 +194,28 @@ export default function PromptSettings(props: any){
                     >
                       -
                     </button>
-                    <div className="text-xs text-gray-400">☰</div>
+                    <div 
+                      className="drag-handle text-xs text-gray-400 cursor-move px-2 py-1 hover:bg-gray-200 rounded"
+                      draggable
+                      onDragStart={(e) => {
+                        e.stopPropagation();
+                        dragIndexRef.current = i;
+                        e.dataTransfer!.effectAllowed = 'move';
+                      }}
+                    >
+                      ☰
+                    </div>
                   </div>
                 </div>
                 {expandedBlocks[b.id] && (
                   <div 
                     className="p-3 border-t bg-white"
                     onMouseDown={(e) => e.stopPropagation()}
-                    onDragStart={(e) => e.preventDefault()}
+                    onDragStart={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    draggable={false}
                   >
                     <div className="mb-2">
                       <label className="block text-xs text-gray-600" htmlFor={`block-name-${b.id}`}>이름 (설명용)</label>
@@ -222,8 +227,7 @@ export default function PromptSettings(props: any){
                         onChange={(e) => {
                           updateBlockField(i, { name: e.target.value })
                         }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onDragStart={(e) => e.preventDefault()}
+                        draggable={false}
                         // avoid blur-then-click swallowing first click; save via header mousedown
                       />
                     </div>
@@ -245,8 +249,7 @@ export default function PromptSettings(props: any){
                               updateBlockField(i, { type: val })
                             }
                           }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onDragStart={(e) => e.preventDefault()}
+                          draggable={false}
                           // save via header mousedown
                         >
                           <option value="system">시스템 프롬프트</option>
@@ -267,8 +270,7 @@ export default function PromptSettings(props: any){
                           onChange={(e) => {
                             updateBlockField(i, { role: e.target.value as 'user' | 'assistant' | 'system' })
                           }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onDragStart={(e) => e.preventDefault()}
+                          draggable={false}
                           // save via header mousedown
                         >
                           <option value="system">system</option>
@@ -293,8 +295,7 @@ export default function PromptSettings(props: any){
                                 const v = Math.max(0, Number(e.target.value) || 0)
                                 updateBlockField(i, { startIndex: v })
                               }}
-                              onMouseDown={(e) => e.stopPropagation()}
-                              onDragStart={(e) => e.preventDefault()}
+                              draggable={false}
                               // save via header mousedown
                             />
                           </div>
@@ -311,8 +312,7 @@ export default function PromptSettings(props: any){
                                 const v = Math.max(0, Number(e.target.value) || 0)
                                 updateBlockField(i, { endIndex: v })
                               }}
-                              onMouseDown={(e) => e.stopPropagation()}
-                              onDragStart={(e) => e.preventDefault()}
+                              draggable={false}
                               // save via header mousedown
                             />
                           </div>
@@ -331,8 +331,7 @@ export default function PromptSettings(props: any){
                           onChange={(e) => {
                             updateBlockField(i, { prompt: e.target.value })
                           }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onDragStart={(e) => e.preventDefault()}
+                          draggable={false}
                           // save via header mousedown
                         />
                       </div>
