@@ -8,9 +8,19 @@ import AdvancedSettings from './settings/AdvancedSettings'
 import { pushToast } from '../components/Toast'
 
 export default function SettingsPage(){
-  const [tab, setTab] = useState<'llm'|'stt'|'tts'|'api'|'prompt'>('llm');
-  const [leftSection, setLeftSection] = useState<'prompt'|'model'|'audio'|'persona'|'advanced'>('prompt');
-  const [audioTab, setAudioTab] = useState<'record'|'play'>('record');
+  // 초기 상태를 sessionStorage에서 복원
+  const [tab, setTab] = useState<'llm'|'stt'|'tts'|'api'|'prompt'>(() => {
+    const saved = sessionStorage.getItem('settingsTab');
+    return (saved as any) || 'llm';
+  });
+  const [leftSection, setLeftSection] = useState<'prompt'|'model'|'audio'|'persona'|'advanced'>(() => {
+    const saved = sessionStorage.getItem('settingsLeftSection');
+    return (saved as any) || 'prompt';
+  });
+  const [audioTab, setAudioTab] = useState<'record'|'play'>(() => {
+    const saved = sessionStorage.getItem('settingsAudioTab');
+    return (saved as any) || 'record';
+  });
 
   const [cfg, setCfg] = useState<any>({});
   const [status, setStatus] = useState('');
@@ -24,7 +34,10 @@ export default function SettingsPage(){
     { id: 'block-conv-2', name: '대화 이력', type: 'conversation', prompt: '', role: 'user' },
     { id: 'block-input-3', name: '사용자 입력', type: 'pure', prompt: '{{user_input}}', role: 'user' }
   ]);
-  const [promptRightTab, setPromptRightTab] = useState<'params'|'blocks'|'other'>('blocks');
+  const [promptRightTab, setPromptRightTab] = useState<'params'|'blocks'|'other'>(() => {
+    const saved = sessionStorage.getItem('settingsPromptRightTab');
+    return (saved as any) || 'blocks';
+  });
   // Save hook from AudioSettings to ensure latest audio selections are persisted before global save
   const audioSaveRef = useRef<null | (() => Promise<void>)>(null);
   // Commit hook from PromptSettings to commit drafts before save
@@ -34,6 +47,23 @@ export default function SettingsPage(){
   const dragIndexRef = useRef<number|null>(null);
   // Child-local prompt blocks reference for global Save
   const promptLocalRef = useRef<any[] | null>(null);
+
+  // 탭 변경 시 sessionStorage에 저장
+  useEffect(() => {
+    sessionStorage.setItem('settingsTab', tab);
+  }, [tab]);
+
+  useEffect(() => {
+    sessionStorage.setItem('settingsLeftSection', leftSection);
+  }, [leftSection]);
+
+  useEffect(() => {
+    sessionStorage.setItem('settingsAudioTab', audioTab);
+  }, [audioTab]);
+
+  useEffect(() => {
+    sessionStorage.setItem('settingsPromptRightTab', promptRightTab);
+  }, [promptRightTab]);
 
   // audio
   useEffect(()=>{
@@ -80,7 +110,11 @@ export default function SettingsPage(){
       await idbSetFishModels(fishModels || []);
       setStatus('설정이 로컬에 저장되었습니다');
       pushToast('설정이 저장되었습니다','success');
-      setTimeout(()=>setStatus(''),2000);
+      
+      // 저장 완료 후 페이지 새로고침 (탭 상태는 sessionStorage에서 복원됨)
+      setTimeout(() => {
+        window.location.reload();
+      }, 300); // 토스트 메시지가 보이도록 짧은 딜레이 후 새로고침
     }catch(e){ setStatus('저장 실패'); pushToast('설정 저장 실패','error'); setTimeout(()=>setStatus(''),2000); }
   }
 
