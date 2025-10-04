@@ -1,0 +1,24 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="512" height="512" fill="#0f172a" rx="80"/>
+  
+  <!-- Gradient Definition -->
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#14b8a6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Person Icon (Head) -->
+  <circle cx="256" cy="180" r="70" fill="url(#grad1)"/>
+  
+  <!-- Person Icon (Body) -->
+  <path d="M 256 260 C 180 260 160 300 160 360 L 160 380 L 352 380 L 352 360 C 352 300 332 260 256 260 Z" fill="url(#grad1)"/>
+  
+  <!-- Speech Bubble -->
+  <path d="M 380 140 L 480 140 C 490 140 498 148 498 158 L 498 218 C 498 228 490 236 480 236 L 440 236 L 420 260 L 420 236 L 380 236 C 370 236 362 228 362 218 L 362 158 C 362 148 370 140 380 140 Z" fill="url(#grad1)" opacity="0.8"/>
+  
+  <!-- Heart in Speech Bubble -->
+  <path d="M 430 170 C 430 165 426 161 421 161 C 418 161 415 163 413 165 C 411 163 408 161 405 161 C 400 161 396 165 396 170 C 396 178 413 190 413 190 C 413 190 430 178 430 170 Z" fill="#0f172a"/>
+</svg>

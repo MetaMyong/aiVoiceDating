@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { getSettings, getConversationHistory, saveConversationHistory } from '../lib/indexeddb'
+import { getSettings, getConversationHistory, saveConversationHistory, getActiveChatRoom } from '../lib/indexeddb'
 import { buildPromptMessages, PromptBlock } from '../lib/promptBuilder'
 
 interface Message {
@@ -7,6 +7,17 @@ interface Message {
   text: string;
   timestamp: string;
 }
+
+// Regex script type used in settings and optional card extensions
+type RegexScript = {
+  id?: string;
+  name?: string;
+  type?: 'request' | 'display' | 'input' | 'output' | 'disabled';
+  in: string;
+  out: string;
+  flags?: string;
+  enabled?: boolean;
+};
 
 // Incremental sentence splitter to buffer partial sentences across chunks
 function splitIntoSentencesIncremental(buffer: string): { sentences: string[]; remainder: string } {
@@ -50,6 +61,11 @@ export default function Chat(){
   const [currentTypingSentence, setCurrentTypingSentence] = useState(''); // Currently typing sentence
   const [completedSentencesForDisplay, setCompletedSentencesForDisplay] = useState<string[]>([]); // Completed sentences
   const [ttsActiveMessageIndex, setTtsActiveMessageIndex] = useState<number | null>(null); // Index of message being TTS'd
+  const [activeRoomId, setActiveRoomId] = useState<string>('default'); // Active chat room ID
+  // Persona/Regex
+  const [regexScripts, setRegexScripts] = useState<RegexScript[]>([]);
+  const [personaCard, setPersonaCard] = useState<any>(null);
+  const [assetMap, setAssetMap] = useState<Record<string,string>>({});
   // Typing animation lead time to run slightly faster than TTS (in ms)
   const TYPING_LEAD_MS = 500;
   
@@ -98,10 +114,74 @@ export default function Chat(){
   useEffect(() => {
     (async () => {
       try {
-        const history = await getConversationHistory('default');
-        if (history && Array.isArray(history)) {
-          setMessages(history);
+        // Listen for chat room changes
+        const onRoomChange = async (e: any) => {
+          const roomId = e.detail?.roomId || 'default'
+          setActiveRoomId(roomId)
+          const history = await getConversationHistory(roomId)
+          if (history && Array.isArray(history)) {
+            setMessages(history)
+          } else {
+            setMessages([])
+          }
         }
+        window.addEventListener('chatRoomChanged', onRoomChange as any)
+        
+        // Load initial room or default
+        const cfg = await getSettings()
+        const cardIdx = cfg?.selectedCharacterCardIndex
+        let roomId = 'default'
+        if (typeof cardIdx === 'number') {
+          const activeRoom = await getActiveChatRoom(cardIdx)
+          if (activeRoom) roomId = activeRoom
+        }
+        setActiveRoomId(roomId)
+        const history = await getConversationHistory(roomId)
+        if (history && Array.isArray(history)) {
+          setMessages(history)
+        }
+        const s = await getSettings();
+        const idx = s?.selectedPersonaIndex ?? 0;
+        const personas = s?.personas || [];
+        const persona = personas[idx];
+        const card = persona?.characterData || null;
+        setPersonaCard(card);
+        // Prefer settings-defined regexScripts; fallback to card customScripts
+        const cfgScripts = Array.isArray(s?.regexScripts) ? s.regexScripts : [];
+        let normalized: RegexScript[] = cfgScripts
+          .map((r: any): RegexScript => ({ id:r.id, name:r.name, type:r.type||'request', in:String(r.in||''), out:String(r.out||''), flags:r.flags||'g', enabled: r.enabled!==false }))
+          .filter((r: RegexScript) => r.in && (r.out!==undefined));
+        if (!normalized.length) {
+          const rs = card?.data?.extensions?.risuai?.customScripts || [];
+          normalized = Array.isArray(rs)
+            ? rs
+                .map((r: any): RegexScript => ({ in: r.in || r.regex_in || '', out: r.out || r.regex_out || '', flags: r.flags || 'g', type: 'display', enabled: true }))
+                .filter((r: RegexScript) => r.in && (r.out!==undefined))
+            : [];
+        }
+        setRegexScripts(normalized);
+        // Build asset name -> uri map
+        const amap: Record<string,string> = {};
+        const assets = card?.data?.assets || [];
+        if (Array.isArray(assets)) {
+          for (const a of assets) {
+            if (a?.name && a?.uri) {
+              amap[String(a.name)] = String(a.uri);
+            }
+          }
+        }
+        // Also support Risu v2-like additionalAssets [[name,uri,ext]]
+        const extAssets = card?.data?.extensions?.risuai?.additionalAssets || [];
+        if (Array.isArray(extAssets)) {
+          for (const ea of extAssets) {
+            if (ea && ea.length >= 2) {
+              const nm = ea[0];
+              const uri = ea[1];
+              amap[String(nm)] = String(uri);
+            }
+          }
+        }
+        setAssetMap(amap);
       } catch (e) {
         console.error('[Chat] Failed to load conversation history', e);
       }
@@ -378,7 +458,7 @@ export default function Chat(){
   async function deleteMessage(index: number) {
     const updatedMessages = messages.filter((_, i) => i !== index);
     setMessages(updatedMessages);
-    await saveConversationHistory('default', updatedMessages);
+    await saveConversationHistory(activeRoomId, updatedMessages);
     setContextMenu(null);
   }
 
@@ -400,7 +480,7 @@ export default function Chat(){
     };
     
     setMessages(updatedMessages);
-    await saveConversationHistory('default', updatedMessages);
+    await saveConversationHistory(activeRoomId, updatedMessages);
     setEditingIndex(null);
     setEditText('');
   }
@@ -496,11 +576,17 @@ export default function Chat(){
       // (user input is already inserted via {{user_input}} placeholder)
       let builtMessages = await buildPromptMessages(promptBlocks, messages);
       
-      // Replace {{user_input}} placeholder with actual user input
+      // Apply input regex transforms to user input BEFORE sending
+      const transformedInput = applyRegexToInput(text.trim());
+
+      // Replace {{user_input}} placeholder with transformed user input
       builtMessages = builtMessages.map(msg => ({
         ...msg,
-        content: msg.content.replace(/\{\{user_input\}\}/g, text.trim())
+        content: msg.content.replace(/\{\{user_input\}\}/g, transformedInput)
       }));
+
+      // Apply request-data regex transforms to the entire prompt payload
+      builtMessages = applyRegexToRequest(builtMessages);
 
       console.log('[Chat] Built messages for LLM:', builtMessages);
 
@@ -562,8 +648,10 @@ export default function Chat(){
             if (data === '[DONE]') { doneStreaming = true; break; }
             try {
               const parsed = JSON.parse(data);
-              const text = parsed?.text ?? parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+              let text = parsed?.text ?? parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (text) {
+                // Apply output regex transforms before any display/TTS handling
+                text = applyRegexToOutput(text);
                 accumulatedText += text;
                 // DON'T show streaming text on screen - keep it hidden
                 // setStreamingText(accumulatedText); // REMOVED
@@ -588,8 +676,9 @@ export default function Chat(){
 
       // Flush any remaining buffered text as a final sentence
       if (sentenceBuffer.trim()) {
-        completedSentences.push(sentenceBuffer.trim());
-        enqueueTTSOrdered(sentenceBuffer.trim());
+        const finalSentence = applyRegexToOutput(sentenceBuffer.trim());
+        completedSentences.push(finalSentence);
+        enqueueTTSOrdered(finalSentence);
       }
 
       console.log('[Chat] Full streamed text:', accumulatedText);
@@ -609,7 +698,7 @@ export default function Chat(){
       const updatedMessages = [...newMessages, assistantMessage];
       
       // Save conversation history (but don't show in UI yet)
-      await saveConversationHistory('default', updatedMessages);
+      await saveConversationHistory(activeRoomId, updatedMessages);
       console.log('[Chat] Conversation saved, waiting for TTS to start before showing message');
 
       // Messages will be added when first TTS starts playing
@@ -850,9 +939,63 @@ export default function Chat(){
 
   // Note: typing view is only shown when this index matches
 
+  // Apply regex scripts to message text to render HTML/CSS
+  function applyRegexToText(text: string): { html: string; changed: boolean } {
+    if (!regexScripts || regexScripts.length === 0) return { html: text, changed: false };
+    let out = text;
+    try {
+      for (const s of regexScripts) {
+        if (s.enabled === false) continue;
+        if (s.type && s.type !== 'display') continue; // display-only here
+        const flags = s.flags || 'g';
+        try {
+          const re = new RegExp(s.in, flags);
+          out = out.replace(re, s.out);
+        } catch {}
+      }
+      // Replace asset://name with actual data URI from card assets
+      out = out.replace(/asset:\/\/([A-Za-z0-9_\-\.]+)/g, (_m, name) => assetMap[name] || _m);
+      const changed = out !== text;
+      return { html: out, changed };
+    } catch {
+      return { html: text, changed: false };
+    }
+  }
+
+  function applyRegexToRequest(messagesPayload: any): any {
+    // Apply 'request' type regex to the entire serialized messages
+    try {
+      const enabled = regexScripts.filter(s=>s.enabled!==false && (s.type||'request')==='request');
+      if (!enabled.length) return messagesPayload;
+      let json = JSON.stringify(messagesPayload);
+      for (const s of enabled){
+        try { const re = new RegExp(s.in, s.flags||'g'); json = json.replace(re, s.out); } catch{}
+      }
+      return JSON.parse(json);
+    } catch { return messagesPayload; }
+  }
+
+  function applyRegexToInput(text: string): string {
+    try{
+      const enabled = regexScripts.filter(s=>s.enabled!==false && s.type==='input');
+      let out = text;
+      for (const s of enabled){ try{ const re=new RegExp(s.in, s.flags||'g'); out = out.replace(re, s.out);}catch{} }
+      return out;
+    }catch{ return text; }
+  }
+
+  function applyRegexToOutput(text: string): string {
+    try{
+      const enabled = regexScripts.filter(s=>s.enabled!==false && s.type==='output');
+      let out = text;
+      for (const s of enabled){ try{ const re=new RegExp(s.in, s.flags||'g'); out = out.replace(re, s.out);}catch{} }
+      return out;
+    }catch{ return text; }
+  }
+
   return (
-    <main className="chat min-h-[60vh] flex flex-col bg-gray-50">
-      <div className="messages flex-1 p-4 overflow-auto space-y-3">
+    <main className="chat min-h-[60vh] flex flex-col">
+      <div className="messages flex-1 p-4 md:p-6 overflow-auto space-y-4 custom-scrollbar">
         {messages.map((msg, idx) => (
           <div 
             key={idx} 
@@ -862,24 +1005,24 @@ export default function Chat(){
             onTouchEnd={handleTouchEnd}
           >
             {editingIndex === idx ? (
-              <div className="w-[90%] mx-auto bg-white rounded-lg shadow-md p-4 border-2 border-blue-400">
+              <div className="w-full md:w-[90%] mx-auto bg-slate-800/70 rounded-xl shadow-2xl p-5 border-2 border-teal-500">
                 <textarea
-                  className="w-full p-3 border rounded resize-none"
+                  className="w-full p-4 bg-slate-900/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 resize-none focus:outline-none focus:ring-2 focus:ring-teal-500/50 custom-scrollbar"
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
                   rows={5}
                   autoFocus
                 />
-                <div className="flex gap-2 mt-3">
+                <div className="flex gap-2 mt-4">
                   <button
                     onClick={saveEditMessage}
-                    className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    className="px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white rounded-lg hover:from-teal-600 hover:to-cyan-600 font-medium transition-all shadow-lg shadow-teal-500/30"
                   >
                     저장
                   </button>
                   <button
                     onClick={cancelEdit}
-                    className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+                    className="px-5 py-2.5 bg-slate-700 text-slate-200 rounded-lg hover:bg-slate-600 font-medium transition-colors"
                   >
                     취소
                   </button>
@@ -887,13 +1030,13 @@ export default function Chat(){
               </div>
             ) : (
               <div 
-                className={`max-w-[70%] rounded-2xl px-4 py-2 shadow-sm ${
+                className={`max-w-[85%] md:max-w-[70%] message-bubble ${
                   msg.role === 'user' 
-                    ? 'bg-yellow-300 text-gray-900' 
-                    : 'bg-white text-gray-900 border border-gray-200'
+                    ? 'user' 
+                    : 'assistant'
                 }`}
               >
-                <div className="whitespace-pre-wrap break-words">
+                <div className="whitespace-pre-wrap break-words text-sm md:text-base">
                   {msg.role === 'assistant' && ttsActiveMessageIndex === idx ? (
                     <>
                       {completedSentencesForDisplay.length > 0 && completedSentencesForDisplay.join(' ')}
@@ -902,10 +1045,18 @@ export default function Chat(){
                       {!currentTypingSentence && completedSentencesForDisplay.length === 0 && '\u200B'}
                     </>
                   ) : (
-                    msg.text
+                    (() => {
+                      if (msg.role === 'assistant') {
+                        const tr = applyRegexToText(msg.text);
+                        if (tr.changed) {
+                          return <div dangerouslySetInnerHTML={{ __html: tr.html }} />
+                        }
+                      }
+                      return msg.text
+                    })()
                   )}
                 </div>
-                <div className="text-xs opacity-60 mt-1">
+                <div className="text-xs opacity-60 mt-1.5">
                   {new Date(msg.timestamp).toLocaleTimeString('ko-KR', { 
                     hour: '2-digit', 
                     minute: '2-digit' 
@@ -925,17 +1076,17 @@ export default function Chat(){
       {/* Context Menu */}
       {contextMenu?.visible && (
         <div
-          className="fixed bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50"
+          className="fixed bg-slate-800 rounded-lg shadow-2xl border border-slate-700/50 py-1 z-50 backdrop-blur-md"
           style={{ 
             left: `${contextMenu.x}px`, 
             top: `${contextMenu.y}px`,
-            minWidth: '140px'
+            minWidth: '160px'
           }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
             onClick={() => startEditMessage(contextMenu.messageIndex)}
-            className="w-full px-4 py-2 text-left hover:bg-gray-100 text-sm flex items-center gap-2"
+            className="w-full px-4 py-2.5 text-left hover:bg-slate-700/50 text-sm flex items-center gap-2 text-slate-200 hover:text-white transition-colors"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -945,7 +1096,7 @@ export default function Chat(){
           </button>
           <button
             onClick={() => deleteMessage(contextMenu.messageIndex)}
-            className="w-full px-4 py-2 text-left hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"
+            className="w-full px-4 py-2.5 text-left hover:bg-red-500/20 text-sm text-red-400 hover:text-red-300 flex items-center gap-2 transition-colors"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="3 6 5 6 21 6"/>
@@ -958,34 +1109,53 @@ export default function Chat(){
         </div>
       )}
       
-      <footer className="composer flex items-center gap-2 p-4 bg-white border-t">
-        <button onClick={toggleMic} aria-pressed={listening} title="Toggle microphone" className={`w-10 h-10 rounded-lg bg-white shadow-lg border flex items-center justify-center ${listening ? 'ring-2 ring-red-300' : ''}`}>
-          {listening ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="10" height="10" rx="3" fill="currentColor" /></svg>
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="7" r="4" /><rect x="10" y="11" width="4" height="6" rx="1" fill="currentColor" stroke="none" /></svg>
-          )}
-        </button>
-        <input 
-          className="flex-1 px-4 py-3 rounded-lg border bg-white" 
-          placeholder="메시지를 입력하세요..." 
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          onKeyPress={handleKeyPress}
-          disabled={isLoading}
-          autoComplete="off"
-        />
-        <button 
-          onClick={handleSendClick} 
-          disabled={isLoading || !inputText.trim()}
-          className="w-10 h-10 rounded-full bg-orange-500 text-white flex items-center justify-center shadow-lg disabled:opacity-50" 
-          title="Send message"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 012 2z" />
+      {activeRoomId && activeRoomId !== 'default' ? (
+        <footer className="composer flex items-center gap-2 md:gap-3 p-4">
+          <button 
+            onClick={toggleMic} 
+            aria-pressed={listening} 
+            title="Toggle microphone" 
+            className={`w-11 h-11 md:w-12 md:h-12 rounded-xl flex items-center justify-center transition-all shadow-lg ${
+              listening 
+                ? 'bg-gradient-to-r from-teal-500 to-cyan-500 ring-2 ring-teal-400/50 shadow-teal-500/30' 
+                : 'bg-slate-800 hover:bg-slate-700 shadow-slate-900/50'
+            }`}
+          >
+            {listening ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" className="text-white"><rect x="7" y="5" width="10" height="10" rx="3" fill="currentColor" /></svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="text-slate-300"><circle cx="12" cy="7" r="4" /><rect x="10" y="11" width="4" height="6" rx="1" fill="currentColor" stroke="none" /></svg>
+            )}
+          </button>
+          <input 
+            className="flex-1 px-4 py-3 md:py-3.5 rounded-xl bg-slate-900/50 border border-slate-700/50 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500/50 transition-all" 
+            placeholder="메시지를 입력하세요..." 
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyPress={handleKeyPress}
+            disabled={isLoading}
+            autoComplete="off"
+          />
+          <button 
+            onClick={handleSendClick} 
+            disabled={isLoading || !inputText.trim()}
+            className="w-11 h-11 md:w-12 md:h-12 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white flex items-center justify-center shadow-lg shadow-teal-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-all" 
+            title="Send message"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
+        </footer>
+      ) : (
+        <div className="p-8 text-center text-slate-400">
+          <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
           </svg>
-        </button>
-      </footer>
+          <p className="text-sm">채팅방을 선택하거나 생성하세요</p>
+        </div>
+      )}
     </main>
   )
 }

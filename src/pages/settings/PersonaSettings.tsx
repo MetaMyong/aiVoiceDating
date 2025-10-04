@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { IconDownload, IconUpload, IconCamera, IconTrash, IconUser } from '../../components/Icons'
 import { pushToast } from '../../components/Toast'
 
 interface Persona {
@@ -342,130 +343,160 @@ export default function PersonaSettings(props: any) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* 상단: 페르소나 갤러리 */}
-      <section className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-gray-800">
-            페르소나 갤러리
-            {selectedPersona && <span className="ml-3 text-sm font-normal text-orange-600">현재: {selectedPersona.name}</span>}
-          </h3>
-          <div className="flex gap-2">
+    <div className="space-y-6">
+      {/* 페르소나 갤러리 - 프리미엄 글래스모픽 디자인 */}
+      <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-8">
+        <div className="absolute inset-0 bg-gradient-to-br from-teal-500/5 via-transparent to-cyan-500/5 pointer-events-none" />
+        
+        <div className="relative flex items-center justify-between mb-8">
+          <div>
+            <h3 className="text-3xl font-bold bg-gradient-to-r from-teal-400 via-cyan-400 to-blue-400 bg-clip-text text-transparent mb-2">
+              페르소나 갤러리
+            </h3>
+            {selectedPersona && (
+              <p className="text-sm text-slate-400">
+                현재 선택: <span className="text-teal-400 font-semibold">{selectedPersona.name}</span>
+              </p>
+            )}
+          </div>
+          <div className="flex gap-3">
             <button
               onClick={handleImportCard}
-              className="px-3 py-1.5 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
+              className="group relative px-5 py-2.5 bg-gradient-to-r from-blue-600/90 to-blue-500/90 hover:from-blue-500 hover:to-blue-400 text-slate-100 text-sm font-semibold rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-400/50 transition-all duration-300 overflow-hidden"
             >
-              임포트
+              <span className="relative z-10 flex items-center gap-2">
+                <IconDownload className="w-5 h-5" /> 임포트
+              </span>
+              <div className="absolute inset-0 bg-gradient-to-r from-blue-400/0 via-blue-400/20 to-blue-400/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
             </button>
             <button
               onClick={handleExportCard}
               disabled={!selectedPersona}
-              className="px-3 py-1.5 bg-green-500 text-white text-sm rounded hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="group relative px-5 py-2.5 bg-gradient-to-r from-green-600/90 to-green-500/90 hover:from-green-500 hover:to-green-400 text-slate-100 text-sm font-semibold rounded-xl shadow-lg shadow-green-500/30 hover:shadow-green-400/50 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-green-500/30 overflow-hidden"
             >
-              익스포트
+              <span className="relative z-10 flex items-center gap-2">
+                <IconUpload className="w-5 h-5" /> 익스포트
+              </span>
+              <div className="absolute inset-0 bg-gradient-to-r from-green-400/0 via-green-400/20 to-green-400/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
             </button>
           </div>
         </div>
 
-        {/* 페르소나 썸네일 그리드 */}
-        <div className="grid grid-cols-6 gap-3">
+        <div className="relative grid grid-cols-6 gap-5">
           {personas.map((persona, idx) => (
             <div
               key={idx}
-              onClick={() => {
-                setSelectedIndex(idx)
-              }}
-              className={`cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${
+              onClick={() => setSelectedIndex(idx)}
+              className={`group cursor-pointer rounded-2xl overflow-hidden transition-all duration-300 transform hover:scale-105 ${
                 idx === selectedIndex
-                  ? 'border-orange-500 shadow-lg scale-105'
-                  : 'border-gray-200 hover:border-gray-400'
+                  ? 'ring-4 ring-teal-500 shadow-2xl shadow-teal-500/50 scale-105'
+                  : 'ring-2 ring-slate-700/50 hover:ring-teal-500/50 shadow-lg hover:shadow-xl'
               }`}
             >
-              <div className="aspect-square bg-gray-100 flex items-center justify-center">
+              <div className="relative aspect-square bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center overflow-hidden">
                 {persona.avatar ? (
-                  <img
-                    src={persona.avatar}
-                    alt={persona.name}
-                    className="w-full h-full object-cover"
-                  />
+                  <>
+                    <img
+                      src={persona.avatar}
+                      alt={persona.name}
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                    <div className="absolute bottom-0 left-0 right-0 p-3 text-slate-100 font-semibold text-sm truncate opacity-0 group-hover:opacity-100 transition-opacity duration-300 transform translate-y-2 group-hover:translate-y-0">
+                      {persona.name}
+                    </div>
+                  </>
                 ) : (
-                  <div className="text-gray-400 text-4xl">?</div>
+                  <div className="text-slate-600 group-hover:text-slate-500 group-hover:scale-110 transition-all duration-300">
+                    <IconUser className="w-16 h-16" />
+                  </div>
                 )}
               </div>
             </div>
           ))}
           
-          {/* 추가 버튼 */}
           <div
             onClick={handleCreatePersona}
-            className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-orange-400 cursor-pointer flex items-center justify-center bg-gray-50 hover:bg-orange-50 transition-colors"
+            className="group aspect-square rounded-2xl border-2 border-dashed border-slate-700/50 hover:border-teal-500 cursor-pointer flex items-center justify-center bg-gradient-to-br from-slate-900/30 to-slate-800/20 hover:from-teal-900/20 hover:to-cyan-900/20 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl"
           >
-            <span className="text-3xl text-gray-400">+</span>
+            <span className="text-6xl text-slate-600 group-hover:text-teal-400 transition-all duration-300 group-hover:scale-110">+</span>
           </div>
         </div>
       </section>
 
-      {/* 하단: 선택된 페르소나 상세 정보 */}
+      {/* 선택된 페르소나 상세 - 프리미엄 디자인 */}
       {selectedPersona && (
-        <section className="bg-white rounded-lg shadow p-6">
-          <div className="flex gap-6">
-            {/* 좌측: 아바타 */}
+        <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-8">
+          <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/5 via-transparent to-teal-500/5 pointer-events-none" />
+          
+          <div className="relative flex gap-8">
             <div className="flex-shrink-0">
               <div
                 onClick={handleChangeAvatar}
-                className="w-48 h-48 rounded-lg overflow-hidden border-2 border-gray-300 hover:border-orange-400 cursor-pointer transition-all bg-gray-100 flex items-center justify-center"
+                className="group relative w-72 h-72 rounded-2xl overflow-hidden border-4 border-slate-700/50 hover:border-teal-500 cursor-pointer transition-all duration-300 bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center shadow-2xl hover:shadow-teal-500/30"
                 title="클릭하여 이미지 변경"
               >
                 {selectedPersona.avatar ? (
-                  <img
-                    src={selectedPersona.avatar}
-                    alt={selectedPersona.name}
-                    className="w-full h-full object-cover"
-                  />
+                  <>
+                    <img
+                      src={selectedPersona.avatar}
+                      alt={selectedPersona.name}
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                    />
+                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+                      <span className="text-slate-100 text-xl font-bold flex items-center gap-2">
+                        <IconCamera className="w-5 h-5" /> 변경하기
+                      </span>
+                    </div>
+                  </>
                 ) : (
-                  <div className="text-gray-400 text-6xl">?</div>
+                  <div className="text-slate-600 text-9xl group-hover:text-slate-500 group-hover:scale-110 transition-all duration-300">?</div>
                 )}
               </div>
               <button
                 onClick={handleDeletePersona}
-                className="mt-3 w-full px-3 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                className="mt-5 w-full px-5 py-3.5 bg-gradient-to-r from-red-600/90 to-red-500/90 hover:from-red-500 hover:to-red-400 text-slate-100 font-bold rounded-xl shadow-lg shadow-red-500/30 hover:shadow-red-400/50 transition-all duration-300 flex items-center justify-center gap-2"
               >
-                삭제
+                <IconTrash className="w-5 h-5" /> 삭제
               </button>
             </div>
 
-            {/* 우측: 정보 */}
-            <div className="flex-1 flex flex-col gap-4">
+            <div className="flex-1 space-y-6">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">이름</label>
+                <label className="flex text-sm font-bold text-slate-300 mb-3 items-center gap-2">
+                  <span className="text-teal-400">✨</span> 이름
+                </label>
                 <input
                   type="text"
                   value={selectedPersona.name}
                   onChange={(e) => updatePersonaName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  className="w-full px-5 py-3.5 bg-slate-800/60 border-2 border-slate-700/50 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all duration-200 shadow-inner"
                   placeholder="페르소나 이름"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">설명</label>
+                <label className="flex text-sm font-bold text-slate-300 mb-3 items-center gap-2">
+                  <span className="text-cyan-400">📝</span> 설명
+                </label>
                 <textarea
                   value={selectedPersona.description}
                   onChange={(e) => updatePersonaDescription(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-400 min-h-[200px] resize-none font-mono text-sm"
+                  className="w-full px-5 py-3.5 bg-slate-800/60 border-2 border-slate-700/50 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all duration-200 min-h-[280px] resize-none font-mono text-sm shadow-inner"
                   placeholder="페르소나에 대한 설명을 입력하세요..."
                 />
               </div>
 
               {selectedPersona.characterData && (
-                <div className="mt-2">
-                  <details className="text-xs text-gray-500">
-                    <summary className="cursor-pointer hover:text-gray-700">캐릭터 카드 원본 데이터</summary>
-                    <pre className="mt-2 p-2 bg-gray-50 rounded overflow-auto max-h-40 text-xs">
-                      {JSON.stringify(selectedPersona.characterData, null, 2)}
-                    </pre>
-                  </details>
-                </div>
+                <details className="group/details">
+                  <summary className="cursor-pointer text-sm text-slate-400 hover:text-teal-400 transition-colors select-none font-semibold flex items-center gap-2">
+                    <span className="transform group-open/details:rotate-90 transition-transform">▶</span>
+                    📋 캐릭터 카드 원본 데이터
+                  </summary>
+                  <pre className="mt-4 p-5 bg-slate-950/60 border-2 border-slate-700/50 rounded-xl overflow-auto max-h-72 text-xs text-slate-300 font-mono shadow-inner">
+                    {JSON.stringify(selectedPersona.characterData, null, 2)}
+                  </pre>
+                </details>
               )}
             </div>
           </div>

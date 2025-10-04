@@ -37,15 +37,15 @@ export default function Settings(){
   return (
     <form className="p-3" onSubmit={handleSave}>
       <div className="mb-3">
-        <label className="block text-sm font-medium">TTS Provider</label>
-        <select className="mt-1 block w-full rounded" value={cfg.ttsProvider || 'gemini'} onChange={e=>setCfg({...cfg, ttsProvider:e.target.value})}>
+        <label className="block text-sm font-medium text-slate-300">TTS Provider</label>
+        <select className="mt-1 block w-full rounded-lg border border-slate-700/50 bg-slate-800/50 text-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/50" value={cfg.ttsProvider || 'gemini'} onChange={e=>setCfg({...cfg, ttsProvider:e.target.value})}>
           <option value="gemini">Gemini</option>
           <option value="fishaudio">FishAudio</option>
         </select>
       </div>
       <div className="mb-3">
-        <label className="block text-sm font-medium">Gemini Voice</label>
-        <input className="mt-1 block w-full rounded" value={cfg.geminiTtsVoiceName||''} onChange={e=>setCfg({...cfg, geminiTtsVoiceName:e.target.value})} />
+        <label className="block text-sm font-medium text-slate-300">Gemini Voice</label>
+        <input className="mt-1 block w-full rounded-lg border border-slate-700/50 bg-slate-800/50 text-white px-3 py-2 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500/50" value={cfg.geminiTtsVoiceName||''} onChange={e=>setCfg({...cfg, geminiTtsVoiceName:e.target.value})} />
       </div>
       <div className="flex items-center justify-between">
         <div className="text-sm text-gray-600">{status}</div>

@@ -42,3 +42,21 @@ export const getConversation = async (id:string) => (await dbGet(`conversations:
 export const setConversation = async (id:string, v:any[]) => await dbSet(`conversations::${id}`, v || []);
 export const getConversationHistory = async (id:string) => await getConversation(id);
 export const saveConversationHistory = async (id:string, v:any[]) => await setConversation(id, v);
+
+// Chat rooms management (per character card)
+export const getChatRooms = async (cardIndex: number) => {
+  const key = `chatRooms::${cardIndex}`;
+  return (await dbGet(key)) || [];
+};
+export const setChatRooms = async (cardIndex: number, rooms: any[]) => {
+  const key = `chatRooms::${cardIndex}`;
+  await dbSet(key, rooms);
+};
+export const getActiveChatRoom = async (cardIndex: number) => {
+  const key = `activeChatRoom::${cardIndex}`;
+  return (await dbGet(key)) || null;
+};
+export const setActiveChatRoom = async (cardIndex: number, roomId: string | null) => {
+  const key = `activeChatRoom::${cardIndex}`;
+  await dbSet(key, roomId);
+};

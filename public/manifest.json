@@ -1,0 +1,26 @@
+{
+  "name": "aiVoiceDating",
+  "short_name": "aiVoiceDating",
+  "description": "AI와 음성으로 대화하는 데이팅 시뮬레이터",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0d9488",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "orientation": "portrait-primary",
+  "categories": ["entertainment", "social"],
+  "lang": "ko-KR"
+}

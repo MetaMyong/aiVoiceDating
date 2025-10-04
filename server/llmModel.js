@@ -1,4 +1,4 @@
-// llmModel.js - Gemini via @google/generative-ai if available, else fallback
+// llmModel.js - Gemini via SSE or @google/genai streaming client
 const fs = require('fs');
 const path = require('path');
 
@@ -40,20 +40,13 @@ function getSystemPrompt() {
 // In-memory conversation history (append-only). Each item: { role: 'user'|'assistant', text: string }
 const CONVERSATION_HISTORY = [];
 
-let genai = null;
 let genaiStreamClient = null;
 let lastInitKey = null;
 function ensureClients() {
   const key = getGeminiKey();
-  if (!key) { genai = null; genaiStreamClient = null; lastInitKey = null; return; }
-  if (lastInitKey === key && (genai || genaiStreamClient)) return;
+  if (!key) { genaiStreamClient = null; lastInitKey = null; return; }
+  if (lastInitKey === key && genaiStreamClient) return;
   lastInitKey = key;
-  try {
-    const { GoogleGenerativeAI } = require('@google/generative-ai');
-    genai = new GoogleGenerativeAI(key);
-  } catch (e) {
-    genai = null;
-  }
   try {
     const { GoogleGenAI } = require('@google/genai');
     genaiStreamClient = new GoogleGenAI({ apiKey: key });
@@ -202,21 +195,6 @@ async function getAiResponse(guildId, userText) {
       return reply;
     } catch (e) {
       console.error('Streaming getAiResponse 실패, fallback 시도:', e && e.message ? e.message : e);
-    }
-  }
-
-  if (genai) {
-    try {
-      const model = genai.getGenerativeModel({ model: MODEL_NAME, systemInstruction: SYSTEM_PROMPT });
-      const chat = model.startChat({ history: [] });
-      console.log(`${now()}${COLOR_GREEN}[LLM][Request]${COLOR_RESET}`, typeof chat === 'object' ? '[object Chat]' : String(chat));
-      const result = await chat.sendMessage(userText);
-      console.log(`${now()}${COLOR_GREEN}[LLM][Response]${COLOR_RESET}`, typeof result === 'object' ? '[object Response]' : String(result));
-      const text = (result && result.response && typeof result.response.text === 'function') ? await result.response.text() : (result && result.text) || String(result || '');
-      return text || '';
-    } catch (e) {
-      console.error('Gemini 라이브러리 호출 실패', e.message || e);
-      return 'AI 응답 생성 중 오류가 발생했습니다.';
     }
   }
 

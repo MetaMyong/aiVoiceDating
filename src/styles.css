@@ -2,24 +2,103 @@
 @tailwind components;
 @tailwind utilities;
 
-:root{--accent:#ff7a2d}
+:root{--accent:#14b8a6}
 html,body,#root{height:100%}
-body{@apply bg-gray-50 font-sans text-gray-900}
-.app{@apply flex h-screen}
-.sidebar{@apply w-64 bg-white border-r px-4 py-6}
-.brand{@apply text-2xl font-bold text-accent mb-3}
+body{@apply bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 font-sans text-slate-100}
+.app{@apply flex h-screen overflow-hidden}
+.sidebar{@apply w-80 flex flex-col border-r}
+.brand{@apply text-2xl font-bold mb-3}
 .conversations{@apply mb-4}
-.conv{@apply block w-full px-3 py-2 rounded-lg bg-white shadow-sm text-left}
+.conv{@apply block w-full px-3 py-2 rounded-lg shadow-sm text-left}
 .settings{@apply mt-4 text-sm}
-.chat{@apply flex-1 flex flex-col}
+.chat{@apply flex-1 flex flex-col bg-slate-900/50}
 .messages{@apply flex-1 overflow-auto p-5}
-.composer{@apply relative border-t px-4 py-3}
-/* make sure the input inside composer fills the content area (account for embedded buttons with right padding) */
-.composer > input{@apply block w-full px-4 py-3 pr-28 rounded-lg border bg-white}
-.send{@apply bg-accent text-white rounded-lg px-4 py-2}
-@media (max-width:720px){
-  .sidebar{display:none}
-  .app{flex-direction:column}
-  .chat{height:100vh}
+.composer{@apply relative border-t border-slate-700/50 px-4 py-3 bg-slate-800/50 backdrop-blur-sm}
+.composer > input{@apply block w-full px-4 py-3 pr-28 rounded-lg border-0 bg-slate-900/50 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500/50}
+.send{@apply bg-gradient-to-r from-teal-500 to-cyan-500 text-white rounded-lg px-4 py-2 font-medium hover:from-teal-600 hover:to-cyan-600 transition-all shadow-lg shadow-teal-500/30}
+@media (max-width:768px){
+  .sidebar{@apply hidden}
+  .app{@apply flex-col}
+  .chat{@apply h-screen}
 }
 
+/* 전역 다크 스크롤바 */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.3);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}
+
+/* 범용 range 입력 스타일 (다크) */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  background: transparent;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px;
+  background: rgba(30,41,59,0.8);
+  border: 1px solid rgba(51,65,85,0.6);
+  border-radius: 9999px;
+}
+input[type="range"]::-moz-range-track {
+  height: 8px;
+  background: rgba(30,41,59,0.8);
+  border: 1px solid rgba(51,65,85,0.6);
+  border-radius: 9999px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 9999px;
+  background: #14b8a6;
+  border: 2px solid rgba(15,23,42,0.8);
+  margin-top: -5px; /* center on track */
+}
+input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px;
+  border-radius: 9999px;
+  background: #14b8a6;
+  border: 2px solid rgba(15,23,42,0.8);
+}
+
+/* 애니메이션 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* 메시지 말풍선 */
+.message-bubble {
+  @apply rounded-2xl px-4 py-3 shadow-lg backdrop-blur-sm;
+}
+
+.message-bubble.user {
+  @apply bg-gradient-to-br from-teal-500 to-cyan-500 text-white shadow-teal-500/30;
+}
+
+.message-bubble.assistant {
+  @apply bg-slate-800/70 text-slate-100 border border-slate-700/50;
+}

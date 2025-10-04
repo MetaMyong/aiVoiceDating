@@ -122,9 +122,9 @@ export default function PromptSettings(props: any){
   return (
     <div>
       {promptRightTab === 'blocks' && (
-        <section className="bg-white rounded shadow p-8">
+        <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-8">
           <div className="mb-3 flex justify-between items-center">
-            <div className="text-sm text-gray-600">프롬프트 블록 편집</div>
+            <div className="text-sm text-slate-300">프롬프트 블록 편집</div>
             <button
               type="button"
               className="w-10 h-10 grid place-items-center bg-green-500 text-white rounded font-bold text-xl hover:bg-green-600 leading-none"
@@ -138,7 +138,7 @@ export default function PromptSettings(props: any){
             {localBlocks.map((b: PromptBlock, i: number) => (
               <div
                 key={b.id}
-                className="border rounded bg-gray-50"
+                className="border border-slate-700/50 rounded-2xl bg-slate-900/40"
                 onDragStart={(e) => {
                   // Only allow drag from the drag handle
                   const target = e.target as HTMLElement;
@@ -178,8 +178,8 @@ export default function PromptSettings(props: any){
                   }}
                 >
                   <div className="flex items-center gap-3">
-                    <div className="text-sm font-medium">{b.name || '(이름 없음)'}</div>
-                    <div className="text-xs text-gray-500">{b.type}</div>
+                    <div className="text-sm font-medium text-slate-200">{b.name || '(이름 없음)'}</div>
+                    <div className="text-xs text-slate-400">{b.type}</div>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -195,7 +195,7 @@ export default function PromptSettings(props: any){
                       -
                     </button>
                     <div 
-                      className="drag-handle text-xs text-gray-400 cursor-move px-2 py-1 hover:bg-gray-200 rounded"
+                      className="drag-handle text-xs text-slate-400 cursor-move px-2 py-1 hover:bg-slate-700/60 rounded"
                       draggable
                       onDragStart={(e) => {
                         e.stopPropagation();
@@ -209,7 +209,7 @@ export default function PromptSettings(props: any){
                 </div>
                 {expandedBlocks[b.id] && (
                   <div 
-                    className="p-3 border-t bg-white"
+                    className="p-4 border-t border-slate-700/50 bg-slate-900/40"
                     onMouseDown={(e) => e.stopPropagation()}
                     onDragStart={(e) => {
                       e.preventDefault();
@@ -218,11 +218,11 @@ export default function PromptSettings(props: any){
                     draggable={false}
                   >
                     <div className="mb-2">
-                      <label className="block text-xs text-gray-600" htmlFor={`block-name-${b.id}`}>이름 (설명용)</label>
+                      <label className="block text-xs text-slate-300" htmlFor={`block-name-${b.id}`}>이름 (설명용)</label>
                       <input
                         id={`block-name-${b.id}`}
                         name={`block-name-${b.id}`}
-                        className="w-full rounded border px-2 py-1"
+                        className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 placeholder-slate-500 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                         value={b.name}
                         onChange={(e) => {
                           updateBlockField(i, { name: e.target.value })
@@ -233,11 +233,11 @@ export default function PromptSettings(props: any){
                     </div>
                     <div className="mb-2 grid grid-cols-2 gap-2">
                       <div>
-                        <label className="block text-xs text-gray-600" htmlFor={`block-type-${b.id}`}>타입</label>
+                        <label className="block text-xs text-slate-300" htmlFor={`block-type-${b.id}`}>타입</label>
                         <select
                           id={`block-type-${b.id}`}
                           name={`block-type-${b.id}`}
-                          className="w-full rounded border px-2 py-1"
+                          className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                           value={b.type}
                           onChange={(e) => {
                             const val = e.target.value as PromptBlock['type']
@@ -259,11 +259,11 @@ export default function PromptSettings(props: any){
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-600" htmlFor={`block-role-${b.id}`}>역할 (role)</label>
+                        <label className="block text-xs text-slate-300" htmlFor={`block-role-${b.id}`}>역할 (role)</label>
                         <select
                           id={`block-role-${b.id}`}
                           name={`block-role-${b.id}`}
-                          className="w-full rounded border px-2 py-1"
+                          className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                           value={b.role}
                           onChange={(e) => {
                             updateBlockField(i, { role: e.target.value as 'user' | 'assistant' | 'system' })
@@ -281,11 +281,11 @@ export default function PromptSettings(props: any){
                       <div>
                         <div className="mb-2 grid grid-cols-2 gap-2">
                           <div>
-                            <label className="block text-xs text-gray-600" htmlFor={`start-${b.id}`}>시작 인덱스 (startIndex)</label>
+                            <label className="block text-xs text-slate-300" htmlFor={`start-${b.id}`}>시작 인덱스 (startIndex)</label>
                             <input
                               id={`start-${b.id}`}
                               name={`start-${b.id}`}
-                              className="w-32 rounded border px-2 py-1"
+                              className="w-32 rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                               type="number"
                               min={0}
                               value={b.startIndex ?? 0}
@@ -298,11 +298,11 @@ export default function PromptSettings(props: any){
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-gray-600" htmlFor={`end-${b.id}`}>끝 인덱스 (endIndex)</label>
+                            <label className="block text-xs text-slate-300" htmlFor={`end-${b.id}`}>끝 인덱스 (endIndex)</label>
                             <input
                               id={`end-${b.id}`}
                               name={`end-${b.id}`}
-                              className="w-32 rounded border px-2 py-1"
+                              className="w-32 rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                               type="number"
                               min={0}
                               value={b.endIndex ?? 0}
@@ -315,15 +315,14 @@ export default function PromptSettings(props: any){
                             />
                           </div>
                         </div>
-                        <div className="text-xs text-gray-500">startIndex와 endIndex는 대화 이력의 인덱스(0=가장 오래된). 예: startIndex=0, endIndex=9 는 처음부터 10개의 메시지를 포함합니다. 음수 인덱스는 지원되지 않습니다.</div>
                       </div>
                     ) : (
                       <div>
-                        <label className="block text-xs text-gray-600" htmlFor={`prompt-${b.id}`}>프롬프트 내용</label>
+                        <label className="block text-xs text-slate-300" htmlFor={`prompt-${b.id}`}>프롬프트 내용</label>
                         <textarea
                           id={`prompt-${b.id}`}
                           name={`prompt-${b.id}`}
-                          className="w-full rounded border px-2 py-1 font-mono text-sm"
+                          className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 placeholder-slate-500 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                           rows={6}
                           value={b.prompt}
                           onChange={(e) => {
@@ -342,12 +341,12 @@ export default function PromptSettings(props: any){
         </section>
       )}
       {promptRightTab === 'params' && (
-        <section className="bg-white rounded shadow p-8">
-          <div className="text-sm text-gray-600 mb-4">LLM 생성 파라미터</div>
+        <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-8">
+          <div className="text-sm text-slate-300 mb-4">LLM 생성 파라미터</div>
           <div className="grid grid-cols-1 gap-4">
             {/* 최대 콘텍스트 크기 */}
             <div>
-              <label className="block text-xs text-gray-600 mb-1" htmlFor="max-context">
+              <label className="block text-xs text-slate-300 mb-1" htmlFor="max-context">
                 최대 콘텍스트 크기
               </label>
               <input
@@ -357,7 +356,7 @@ export default function PromptSettings(props: any){
                 min="1024"
                 max="1000000"
                 step="1024"
-                className="w-full rounded border px-3 py-2"
+                className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                 value={cfg.maxContextSize || 50000}
                 onChange={(e) => {
                   const val = Math.max(1024, parseInt(e.target.value) || 50000);
@@ -365,14 +364,14 @@ export default function PromptSettings(props: any){
                 }}
                 placeholder="50000"
               />
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-400 mt-1">
                 모델이 처리할 수 있는 최대 토큰 수 (기본값: 50000)
               </div>
             </div>
 
             {/* 최대 응답 크기 */}
             <div>
-              <label className="block text-xs text-gray-600 mb-1" htmlFor="max-output">
+              <label className="block text-xs text-slate-300 mb-1" htmlFor="max-output">
                 최대 응답 크기
               </label>
               <input
@@ -382,7 +381,7 @@ export default function PromptSettings(props: any){
                 min="128"
                 max="100000"
                 step="128"
-                className="w-full rounded border px-3 py-2"
+                className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                 value={cfg.maxOutputTokens || 8192}
                 onChange={(e) => {
                   const val = Math.max(128, parseInt(e.target.value) || 8192);
@@ -390,7 +389,7 @@ export default function PromptSettings(props: any){
                 }}
                 placeholder="8192"
               />
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-400 mt-1">
                 생성될 응답의 최대 토큰 수 (기본값: 8192)
               </div>
             </div>
@@ -406,9 +405,9 @@ export default function PromptSettings(props: any){
                   onChange={(e) => {
                     setCfg({ ...cfg, thinkingEnabled: e.target.checked });
                   }}
-                  className="rounded"
+                  className="rounded accent-teal-500"
                 />
-                <label className="text-xs text-gray-600" htmlFor="thinking-enabled">
+                <label className="text-xs text-slate-300" htmlFor="thinking-enabled">
                   Thinking Tokens 사용
                 </label>
               </div>
@@ -420,7 +419,7 @@ export default function PromptSettings(props: any){
                   min="0"
                   max="50000"
                   step="500"
-                  className="w-full rounded border px-3 py-2"
+                  className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                   value={cfg.thinkingTokens || 5000}
                   onChange={(e) => {
                     const val = Math.max(0, parseInt(e.target.value) || 5000);
@@ -429,7 +428,7 @@ export default function PromptSettings(props: any){
                   placeholder="5000"
                 />
               )}
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-400 mt-1">
                 모델의 내부 추론에 사용할 토큰 수 (기본값: 5000)
               </div>
             </div>
@@ -445,9 +444,9 @@ export default function PromptSettings(props: any){
                   onChange={(e) => {
                     setCfg({ ...cfg, temperatureEnabled: e.target.checked });
                   }}
-                  className="rounded"
+                  className="rounded accent-teal-500"
                 />
-                <label className="text-xs text-gray-600" htmlFor="temperature-enabled">
+                <label className="text-xs text-slate-300" htmlFor="temperature-enabled">
                   온도 (Temperature) 사용
                 </label>
               </div>
@@ -459,7 +458,7 @@ export default function PromptSettings(props: any){
                   min="0"
                   max="2"
                   step="0.01"
-                  className="w-full rounded border px-3 py-2"
+                  className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                   value={cfg.temperature ?? 1.0}
                   onChange={(e) => {
                     const val = Math.max(0, Math.min(2, parseFloat(e.target.value) || 1.0));
@@ -468,7 +467,7 @@ export default function PromptSettings(props: any){
                   placeholder="1.0"
                 />
               )}
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-400 mt-1">
                 응답의 창의성 조절 (0.0~2.0, 기본값: 1.0)
               </div>
             </div>
@@ -484,9 +483,9 @@ export default function PromptSettings(props: any){
                   onChange={(e) => {
                     setCfg({ ...cfg, topPEnabled: e.target.checked });
                   }}
-                  className="rounded"
+                  className="rounded accent-teal-500"
                 />
-                <label className="text-xs text-gray-600" htmlFor="top-p-enabled">
+                <label className="text-xs text-slate-300" htmlFor="top-p-enabled">
                   Top P 사용
                 </label>
               </div>
@@ -498,7 +497,7 @@ export default function PromptSettings(props: any){
                   min="0"
                   max="1"
                   step="0.01"
-                  className="w-full rounded border px-3 py-2"
+                  className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                   value={cfg.topP ?? 0.95}
                   onChange={(e) => {
                     const val = Math.max(0, Math.min(1, parseFloat(e.target.value) || 0.95));
@@ -507,7 +506,7 @@ export default function PromptSettings(props: any){
                   placeholder="0.95"
                 />
               )}
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-400 mt-1">
                 누적 확률 임계값 (0.0~1.0, 기본값: 0.95)
               </div>
             </div>
