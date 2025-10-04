@@ -18,6 +18,8 @@ body{@apply bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 font-san
 .send{@apply bg-gradient-to-r from-teal-500 to-cyan-500 text-white rounded-lg px-4 py-2 font-medium hover:from-teal-600 hover:to-cyan-600 transition-all shadow-lg shadow-teal-500/30}
 @media (max-width:768px){
   .sidebar{@apply hidden}
+  /* 모바일 오버레이에서 강제로 표시할 때 사용할 클래스 */
+  .sidebar.force-show{display:flex !important; width:100% !important; border-right:none !important}
   .app{@apply flex-col}
   .chat{@apply h-screen}
 }

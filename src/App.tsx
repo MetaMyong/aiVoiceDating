@@ -97,35 +97,31 @@ export default function App(){
 
             {/* 모바일 사이드바 오버레이 */}
             {showMobileSidebar && (
-              <div
-                className="md:hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50"
-                onClick={() => setShowMobileSidebar(false)}
-              >
-                <div
-                  className="w-80 h-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 shadow-2xl overflow-hidden"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="h-full flex flex-col">
-                    <div className="flex items-center justify-between p-4 border-b border-slate-700/50">
-                      <h2 className="text-white font-bold text-lg">캐릭터 선택</h2>
-                      <button
-                        onClick={() => setShowMobileSidebar(false)}
-                        className="w-8 h-8 rounded-lg hover:bg-slate-700/50 text-slate-400 hover:text-white flex items-center justify-center transition-colors"
-                      >
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                    <div className="flex-1 overflow-hidden">
-                      <Sidebar onCardSelect={() => setShowMobileSidebar(false)} />
-                    </div>
+              <div className="md:hidden fixed inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 z-40">
+                <div className="h-full flex flex-col">
+                  {/* 상단 헤더 */}
+                  <div className="flex items-center justify-between p-4 border-b border-slate-700/50">
+                    <button
+                      onClick={() => setShowMobileSidebar(false)}
+                      className="w-10 h-10 rounded-lg hover:bg-slate-700/50 text-white flex items-center justify-center transition-colors"
+                      aria-label="뒤로가기"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+                    <h2 className="text-white font-bold text-lg">AI Voice Dating</h2>
+                    <div className="w-10" />
+                  </div>
+                  {/* 사이드바 콘텐츠 */}
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                    <Sidebar className="h-full w-full border-r-0 force-show sidebar-mobile" onCardSelect={() => setShowMobileSidebar(false)} />
                   </div>
                 </div>
               </div>
             )}
 
-            <Sidebar className="hidden md:flex" />
+            <Sidebar className="hidden md:flex sidebar-desktop" />
             {panelPersona && (
               <CharacterSidePanel
                 open={panelOpen}

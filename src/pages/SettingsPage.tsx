@@ -180,39 +180,40 @@ export default function SettingsPage(){
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex justify-center">
       <div className="flex w-full max-w-[1192px]">
-        <aside className="hidden md:flex w-48 bg-slate-800/50 border-r border-slate-700/50 p-6 flex-col gap-2">
-          <button onClick={()=>setLeftSection('prompt')} className={`text-left px-3 py-2.5 rounded-lg transition-all ${leftSection==='prompt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>프롬프트</button>
-          <button onClick={()=>setLeftSection('model')} className={`text-left px-3 py-2.5 rounded-lg transition-all ${leftSection==='model'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>모델</button>
-          <button onClick={()=>setLeftSection('audio')} className={`text-left px-3 py-2.5 rounded-lg transition-all ${leftSection==='audio'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>오디오</button>
-          <button onClick={()=>setLeftSection('persona')} className={`text-left px-3 py-2.5 rounded-lg transition-all ${leftSection==='persona'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>페르소나</button>
-          <button onClick={()=>setLeftSection('advanced')} className={`text-left px-3 py-2.5 rounded-lg transition-all ${leftSection==='advanced'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>고급설정</button>
+        {/* 좌측 탭: 모바일에서도 표시 */}
+        <aside className="w-32 md:w-48 bg-slate-800/50 border-r border-slate-700/50 p-2 md:p-6 flex flex-col gap-2">
+          <button onClick={()=>setLeftSection('prompt')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='prompt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>프롬프트</button>
+          <button onClick={()=>setLeftSection('model')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='model'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>모델</button>
+          <button onClick={()=>setLeftSection('audio')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='audio'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>오디오</button>
+          <button onClick={()=>setLeftSection('persona')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='persona'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>페르소나</button>
+          <button onClick={()=>setLeftSection('advanced')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='advanced'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>고급설정</button>
         </aside>
 
         <main className="flex-1 md:w-[1000px] p-0 flex flex-col items-stretch">
-          <div className="relative px-4 py-4 bg-slate-800/30 border-b border-slate-700/50">
-            <div className="flex gap-2 mb-0 justify-start flex-wrap">
+          <div className="relative px-2 md:px-4 py-2 md:py-4 bg-slate-800/30 border-b border-slate-700/50">
+            <div className="flex gap-1 md:gap-2 mb-0 justify-start flex-wrap">
               {leftSection === 'audio' ? (
                 <>
-                  <button type="button" className={`px-4 py-2 rounded-lg transition-all ${audioTab==='record'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onClick={()=>setAudioTab('record')}>녹음</button>
-                  <button type="button" className={`px-4 py-2 rounded-lg transition-all ${audioTab==='play'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onClick={()=>setAudioTab('play')}>재생</button>
+                  <button type="button" className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${audioTab==='record'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onClick={()=>setAudioTab('record')}>녹음</button>
+                  <button type="button" className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${audioTab==='play'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onClick={()=>setAudioTab('play')}>재생</button>
                 </>
               ) : leftSection === 'model' ? (
                 <>
-                  <button onClick={()=>setTab('llm')} className={`px-4 py-2 rounded-lg transition-all ${tab==='llm'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>LLM</button>
-                  <button onClick={()=>setTab('stt')} className={`px-4 py-2 rounded-lg transition-all ${tab==='stt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>STT</button>
-                  <button onClick={()=>setTab('api')} className={`px-4 py-2 rounded-lg transition-all ${tab==='api'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>API</button>
+                  <button onClick={()=>setTab('llm')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='llm'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>LLM</button>
+                  <button onClick={()=>setTab('stt')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='stt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>STT</button>
+                  <button onClick={()=>setTab('api')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='api'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>API</button>
                 </>
               ) : leftSection === 'prompt' ? (
                 <>
-                  <button onClick={()=>setPromptRightTab('params')} className={`px-4 py-2 rounded-lg transition-all ${promptRightTab==='params'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>파라미터</button>
-                  <button onClick={()=>setPromptRightTab('blocks')} className={`px-4 py-2 rounded-lg transition-all ${promptRightTab==='blocks'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>프롬프트 블록</button>
-                  <button onClick={()=>setPromptRightTab('other')} className={`px-4 py-2 rounded-lg transition-all ${promptRightTab==='other'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>기타</button>
+                  <button onClick={()=>setPromptRightTab('params')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='params'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>파라미터</button>
+                  <button onClick={()=>setPromptRightTab('blocks')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='blocks'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>프롬프트 블록</button>
+                  <button onClick={()=>setPromptRightTab('other')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='other'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>기타</button>
                 </>
               ) : null}
             </div>
           </div>
 
-          <div className="flex-1 flex flex-col bg-slate-900/50 rounded-b-lg shadow-inner px-4 md:px-6 py-6 overflow-y-auto custom-scrollbar">
+          <div className="flex-1 flex flex-col bg-slate-900/50 rounded-b-lg shadow-inner px-2 md:px-6 py-4 md:py-6 overflow-y-auto custom-scrollbar">
             {leftSection === 'audio' && (
               <AudioSettings leftSection={leftSection} audioTab={audioTab} cfg={cfg} setCfg={setCfg} onRegisterSave={(fn: ()=>Promise<void>)=>{ audioSaveRef.current = fn; }} />
             )}
@@ -253,13 +254,13 @@ export default function SettingsPage(){
         </main>
       </div>
 
-      {/* 뒤로가기 버튼 */}
+      {/* 뒤로가기 버튼: 모바일은 좌측 하단, 데스크톱은 좌측 상단 */}
       <button 
         onClick={() => { window.location.href = '/'; }}
-        className="fixed left-6 top-6 w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition-colors shadow-lg z-50"
+        className="fixed left-2 bottom-4 md:left-6 md:bottom-auto md:top-6 w-8 h-8 md:w-10 md:h-10 rounded-lg bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition-colors shadow-lg z-50"
         aria-label="뒤로가기"
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="w-4 h-4 md:w-5 md:h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <line x1="19" y1="12" x2="5" y2="12"/>
           <polyline points="12 19 5 12 12 5"/>
         </svg>
@@ -269,7 +270,7 @@ export default function SettingsPage(){
       <button 
         onMouseDown={(e) => e.preventDefault()}
         onClick={()=>saveCfg()} 
-        className="fixed left-1/2 transform -translate-x-1/2 bottom-6 px-6 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white rounded-lg shadow-lg hover:shadow-xl transition-all font-medium z-50"
+        className="fixed left-1/2 transform -translate-x-1/2 bottom-4 md:bottom-6 px-4 md:px-6 py-2 md:py-3 text-sm md:text-base bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white rounded-lg shadow-lg hover:shadow-xl transition-all font-medium z-50"
       >
         저장
       </button>

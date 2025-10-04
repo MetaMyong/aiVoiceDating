@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { IconDownload, IconUpload, IconCamera, IconTrash, IconUser, IconCog } from '../../components/Icons'
+import { IconDownload, IconUpload, IconCamera, IconTrash, IconUser } from '../../components/Icons'
 import { pushToast } from '../../components/Toast'
 import CharacterSidePanel from '../../components/CharacterSidePanel'
 import { setSettings as idbSetSettings, getSettings as idbGetSettings } from '../../lib/indexeddb'
@@ -438,55 +438,10 @@ export default function PersonaSettings(props: any) {
   return (
     <div className="space-y-6">
       {/* 페르소나 갤러리 - 프리미엄 글래스모픽 디자인 */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-8">
+      <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-4 md:p-8">
         <div className="absolute inset-0 bg-gradient-to-br from-teal-500/5 via-transparent to-cyan-500/5 pointer-events-none" />
         
-        <div className="relative flex items-center justify-between mb-8">
-          <div>
-            <h3 className="text-3xl font-bold bg-gradient-to-r from-teal-400 via-cyan-400 to-blue-400 bg-clip-text text-transparent mb-2">
-              페르소나 갤러리
-            </h3>
-            {selectedPersona && (
-              <p className="text-sm text-slate-400">
-                현재 선택: <span className="text-teal-400 font-semibold">{selectedPersona.name}</span>
-              </p>
-            )}
-          </div>
-          <div className="flex gap-3">
-            {selectedPersona && (
-              <button
-                onClick={()=>setPanelOpen(true)}
-                className="group relative px-5 py-2.5 bg-gradient-to-r from-slate-700/90 to-slate-600/90 hover:from-slate-600 hover:to-slate-500 text-slate-100 text-sm font-semibold rounded-xl shadow-lg shadow-slate-700/30 hover:shadow-slate-600/50 transition-all duration-300 overflow-hidden"
-              >
-                <span className="relative z-10 flex items-center gap-2">
-                  <IconCog className="w-5 h-5" /> 편집
-                </span>
-                <div className="absolute inset-0 bg-gradient-to-r from-slate-400/0 via-slate-400/10 to-slate-400/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
-              </button>
-            )}
-            <button
-              onClick={handleImportCard}
-              className="group relative px-5 py-2.5 bg-gradient-to-r from-blue-600/90 to-blue-500/90 hover:from-blue-500 hover:to-blue-400 text-slate-100 text-sm font-semibold rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-400/50 transition-all duration-300 overflow-hidden"
-            >
-              <span className="relative z-10 flex items-center gap-2">
-                <IconDownload className="w-5 h-5" /> 임포트
-              </span>
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-400/0 via-blue-400/20 to-blue-400/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
-            </button>
-            <button
-              onClick={handleExportCard}
-              disabled={!selectedPersona}
-              className="group relative px-5 py-2.5 bg-gradient-to-r from-green-600/90 to-green-500/90 hover:from-green-500 hover:to-green-400 text-slate-100 text-sm font-semibold rounded-xl shadow-lg shadow-green-500/30 hover:shadow-green-400/50 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-green-500/30 overflow-hidden"
-            >
-              <span className="relative z-10 flex items-center gap-2">
-                <IconUpload className="w-5 h-5" /> 익스포트
-              </span>
-              <div className="absolute inset-0 bg-gradient-to-r from-green-400/0 via-green-400/20 to-green-400/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
-            </button>
-          </div>
-        </div>
-
-        <div className="relative grid grid-cols-6 gap-5">
+        <div className="relative grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 md:gap-5">
           {personas.map((persona, idx) => (
             <div
               key={idx}
@@ -526,6 +481,31 @@ export default function PersonaSettings(props: any) {
             <span className="text-6xl text-slate-600 group-hover:text-teal-400 transition-all duration-300 group-hover:scale-110">+</span>
           </div>
         </div>
+
+        {/* 액션 버튼: 그리드 아래 배치 */}
+        <div className="relative flex items-center justify-end mt-6 md:mt-8">
+          <div className="flex gap-2 md:gap-3">
+            <button
+              onClick={handleImportCard}
+              className="group relative px-3 md:px-5 py-1.5 md:py-2.5 bg-gradient-to-r from-blue-600/90 to-blue-500/90 hover:from-blue-500 hover:to-blue-400 text-slate-100 text-xs md:text-sm font-semibold rounded-lg md:rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-400/50 transition-all duration-300 overflow-hidden"
+            >
+              <span className="relative z-10 flex items-center gap-2">
+                <IconDownload className="w-5 h-5" /> 임포트
+              </span>
+              <div className="absolute inset-0 bg-gradient-to-r from-blue-400/0 via-blue-400/20 to-blue-400/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
+            </button>
+            <button
+              onClick={handleExportCard}
+              disabled={!selectedPersona}
+              className="group relative px-3 md:px-5 py-1.5 md:py-2.5 bg-gradient-to-r from-green-600/90 to-green-500/90 hover:from-green-500 hover:to-green-400 text-slate-100 text-xs md:text-sm font-semibold rounded-lg md:rounded-xl shadow-lg shadow-green-500/30 hover:shadow-green-400/50 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-green-500/30 overflow-hidden"
+            >
+              <span className="relative z-10 flex items-center gap-2">
+                <IconUpload className="w-5 h-5" /> 익스포트
+              </span>
+              <div className="absolute inset-0 bg-gradient-to-r from-green-400/0 via-green-400/20 to-green-400/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
+            </button>
+          </div>
+        </div>
       </section>
 
       {/* 선택된 페르소나 상세 - 프리미엄 디자인 */}
@@ -533,11 +513,11 @@ export default function PersonaSettings(props: any) {
         <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-8">
           <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/5 via-transparent to-teal-500/5 pointer-events-none" />
           
-          <div className="relative flex gap-8">
+          <div className="relative flex flex-col md:flex-row gap-6 md:gap-8">
             <div className="flex-shrink-0 space-y-5">
               <div
                 onClick={handleChangeAvatar}
-                className="group relative w-72 h-72 rounded-2xl overflow-hidden border-4 border-slate-700/50 hover:border-teal-500 cursor-pointer transition-all duration-300 bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center shadow-2xl hover:shadow-teal-500/30"
+                className="group relative w-full md:w-72 aspect-square md:aspect-auto md:h-72 rounded-2xl overflow-hidden border-4 border-slate-700/50 hover:border-teal-500 cursor-pointer transition-all duration-300 bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center shadow-2xl hover:shadow-teal-500/30"
                 title="클릭하여 이미지 변경"
               >
                 {selectedPersona.avatar ? (

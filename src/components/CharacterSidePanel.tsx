@@ -125,6 +125,9 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   const [activeRoomId, setActiveRoomIdLocal] = useState<string>('')
   const [leftOffset, setLeftOffset] = useState<number>(0)
   const asideRef = useRef<HTMLElement | null>(null)
+  const roRef = useRef<ResizeObserver | null>(null)
+  const moRef = useRef<MutationObserver | null>(null)
+  const [isMdUp, setIsMdUp] = useState<boolean>(() => typeof window !== 'undefined' ? window.matchMedia('(min-width: 768px)').matches : true)
 
   // Local editable states sourced from persona.characterData (Risu CCv3)
   const v3 = useMemo(()=>{
@@ -203,6 +206,8 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   })
   const [openLoreIdx, setOpenLoreIdx] = useState<Record<string, boolean>>({})
   const [openScriptIdx, setOpenScriptIdx] = useState<Record<string, boolean>>({})
+  // Mobile tab state
+  const [mobileTab, setMobileTab] = useState<'rooms'|'card'|'lore'|'scripts'>('rooms')
   
   // Room drafts for each room by ID
   const roomDraftsRef = useRef<Record<string, RoomDraft>>({})
@@ -442,26 +447,66 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   
   const roomDraftHandlers = roomDraftHandlersRef.current
 
-  // Measure sidebar width to align panel flush to its left edge
+  // Track breakpoint and dynamically measure the current sidebar element (desktop or mobile overlay)
   useLayoutEffect(() => {
-    const aside = document.querySelector('aside.sidebar') as HTMLElement | null
-    asideRef.current = aside
-    const measure = () => {
-      const w = aside ? aside.getBoundingClientRect().width : 0
+    const mq = window.matchMedia('(min-width: 768px)')
+    const handleMQ = () => setIsMdUp(mq.matches)
+    handleMQ()
+    mq.addEventListener?.('change', handleMQ)
+
+    const measure = (el: HTMLElement | null) => {
+      const w = el ? el.getBoundingClientRect().width : 0
       setLeftOffset(Math.max(0, Math.round(w)))
     }
-    // Observe size changes for immediate updates
-    let ro: ResizeObserver | null = null
-    if (aside && 'ResizeObserver' in window) {
-      ro = new ResizeObserver(() => measure())
-      ro.observe(aside)
+
+    const attachToCurrentAside = () => {
+      // Breakpoint별 사이드바 선택: 데스크톱은 .sidebar-desktop, 모바일 오버레이에서는 .sidebar-mobile
+      const selector = isMdUp ? 'aside.sidebar.sidebar-desktop' : 'aside.sidebar.sidebar-mobile'
+      const currentAside = document.querySelector(selector) as HTMLElement | null
+      if (currentAside !== asideRef.current) {
+        // Detach old observer
+        if (roRef.current && asideRef.current) {
+          try { roRef.current.unobserve(asideRef.current) } catch {}
+        }
+        asideRef.current = currentAside
+        // Attach new observer
+        if (currentAside && 'ResizeObserver' in window) {
+          if (!roRef.current) {
+            roRef.current = new ResizeObserver(() => measure(asideRef.current))
+          }
+          try { roRef.current.observe(currentAside) } catch {}
+        }
+      }
+      measure(currentAside)
     }
-    measure()
-    const onResize = () => measure()
+
+    // Initial attach
+    attachToCurrentAside()
+    const onResize = () => attachToCurrentAside()
     window.addEventListener('resize', onResize)
+
+    // Observe DOM changes to swap between mobile overlay sidebar and desktop sidebar
+    if ('MutationObserver' in window) {
+      moRef.current = new MutationObserver(() => {
+        // Debounce slightly
+        requestAnimationFrame(attachToCurrentAside)
+      })
+      try {
+        moRef.current.observe(document.body, { childList: true, subtree: true })
+      } catch {}
+    }
+
     return () => {
       window.removeEventListener('resize', onResize)
-      if (ro && aside) ro.disconnect()
+      mq.removeEventListener?.('change', handleMQ)
+      if (roRef.current && asideRef.current) {
+        try { roRef.current.unobserve(asideRef.current) } catch {}
+      }
+      roRef.current = null
+      if (moRef.current) {
+        try { moRef.current.disconnect() } catch {}
+      }
+      moRef.current = null
     }
   }, [])
 
@@ -589,10 +634,10 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   // UI helpers
   const PanelWrapper = ({ children }: {children: React.ReactNode}) => (
     <div 
-      className="fixed top-0 right-0 bottom-0 z-50"
-      style={{ width: `calc(100vw - ${leftOffset}px)`, display: open ? 'block' : 'none' }}
+      className="fixed top-0 right-0 bottom-0 z-[70] w-full md:w-[unset]"
+      style={{ width: isMdUp ? `calc(100vw - ${leftOffset}px)` : '100vw', display: open ? 'block' : 'none', left: isMdUp ? undefined : 0 }}
     >
-      <div className="h-full bg-slate-900/95 border-l border-slate-700/50 shadow-2xl backdrop-blur-xl p-6 overflow-auto">
+      <div className="h-full bg-slate-900/95 border-l border-slate-700/50 shadow-2xl backdrop-blur-xl p-4 md:p-6 overflow-auto">
         {children}
       </div>
     </div>
@@ -600,15 +645,29 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
 
   return (
     <>
-      {/* overlay */}
-      <div 
-        className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40" 
-        style={{ display: open ? 'block' : 'none' }}
-        onClick={onClose} 
-      />
+      {/* overlay: 데스크톱에서만 표시 (사이드바 영역 비우기). 모바일에서는 사이드바 위로 패널을 올리고 입력 가로막지 않도록 오버레이 제거 */}
+      {isMdUp && (
+        <div 
+          className="fixed bg-black/40 backdrop-blur-sm z-[65]" 
+          style={{ display: open ? 'block' : 'none', top: 0, right: 0, bottom: 0, left: `${leftOffset}px` }}
+          onClick={onClose} 
+        />
+      )}
       <PanelWrapper>
-        <div className="flex items-center justify-between mb-6">
-          <div className="text-slate-400 text-sm">캐릭터 편집</div>
+        <div className="flex items-center justify-between mb-4 md:mb-6">
+          <div className="flex items-center gap-2">
+            {/* 모바일 전용 뒤로가기 */}
+            <button
+              onClick={onClose}
+              className="md:hidden w-9 h-9 -ml-1 rounded-lg hover:bg-slate-700/60 text-white flex items-center justify-center"
+              aria-label="뒤로가기"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <div className="text-slate-300 text-sm font-semibold">캐릭터 편집</div>
+          </div>
           <div className="flex gap-2">
             <button 
               onMouseDown={(e) => e.preventDefault()} 
@@ -617,12 +676,22 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
             >
               저장
             </button>
-            <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-700/70 hover:bg-slate-600/70 text-slate-200">닫기</button>
+            <button onClick={onClose} className="hidden md:inline-flex px-4 py-2 rounded-lg bg-slate-700/70 hover:bg-slate-600/70 text-slate-200">닫기</button>
           </div>
         </div>
 
-        {/* 4-column layout always visible with separators */}
-        <div className="grid [grid-template-columns:1fr_auto_1fr_auto_1fr_auto_1fr] gap-6">
+        {/* 모바일 탭 바 */}
+        <div className="md:hidden sticky top-0 z-10 -mx-4 md:mx-0 mb-4 bg-slate-900/95 border-b border-slate-700/50">
+          <div className="px-4 py-2 flex items-center gap-2 overflow-x-auto">
+            <button onClick={()=>setMobileTab('rooms')} className={`px-3 py-1.5 rounded-lg text-sm ${mobileTab==='rooms'?'bg-teal-600 text-white':'bg-slate-800/60 text-slate-200'}`}>채팅방</button>
+            <button onClick={()=>setMobileTab('card')} className={`px-3 py-1.5 rounded-lg text-sm ${mobileTab==='card'?'bg-teal-600 text-white':'bg-slate-800/60 text-slate-200'}`}>카드</button>
+            <button onClick={()=>setMobileTab('lore')} className={`px-3 py-1.5 rounded-lg text-sm ${mobileTab==='lore'?'bg-teal-600 text-white':'bg-slate-800/60 text-slate-200'}`}>로어북</button>
+            <button onClick={()=>setMobileTab('scripts')} className={`px-3 py-1.5 rounded-lg text-sm ${mobileTab==='scripts'?'bg-teal-600 text-white':'bg-slate-800/60 text-slate-200'}`}>스크립트</button>
+          </div>
+        </div>
+
+  {/* 데스크톱 4-컬럼 레이아웃 */}
+  <div className="hidden md:grid [grid-template-columns:1fr_auto_1fr_auto_1fr_auto_1fr] gap-6">
           {/* 1. Sessions */}
           <div className="space-y-3">
             <div className="text-sm font-bold text-slate-300 text-center">채팅방</div>
@@ -640,7 +709,12 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                       onChange={roomDraftHandlers[r.id]?.name}
                       onBlur={() => commitRoomDraft(r.id)}
                     />
-                    <button onClick={()=>emitRoomChange(r.id)} className={`px-2 py-1 text-xs rounded ${activeRoomId===r.id? 'bg-teal-600 text-white':'bg-slate-700/70 text-slate-200 hover:bg-slate-600/70'}`}>활성화</button>
+                    <button onClick={()=>emitRoomChange(r.id)} className={`p-1.5 rounded ${activeRoomId===r.id? 'bg-teal-600 text-white':'bg-slate-700/70 text-slate-200 hover:bg-slate-600/70'}`} title="활성화">
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 2v10"/>
+                        <path d="M6.5 11a5.5 5.5 0 1 0 11 0"/>
+                      </svg>
+                    </button>
                     <button onClick={()=>removeRoom(r.id)} className="p-1 text-slate-300 hover:text-red-400"><IconTrash className="w-4 h-4"/></button>
                   </div>
                 )
@@ -991,6 +1065,142 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
               }}>+ 스크립트 추가</button>
             </div>
           </div>
+        </div>
+
+        {/* 모바일: 탭에 따라 섹션 노출 */}
+        <div className="md:hidden space-y-4">
+          {mobileTab==='rooms' && (
+            <div className="space-y-3">
+              <div className="text-sm font-bold text-slate-300 text-center">채팅방</div>
+              <div className="space-y-2">
+                {rooms.map(r=> {
+                  const draft = roomDraftsRef.current[r.id] || { name: r.name }
+                  return (
+                    <div key={r.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${activeRoomId===r.id? 'border-teal-500/60 bg-slate-800/60':'border-slate-700/50 bg-slate-900/40'}`}>
+                      <label htmlFor={`m-room-name-${r.id}`} className="sr-only">채팅방 이름</label>
+                      <LoreInput id={`m-room-name-${r.id}`} className="flex-1 bg-transparent outline-none text-slate-100" value={draft.name} onChange={roomDraftHandlers[r.id]?.name} onBlur={()=>commitRoomDraft(r.id)} />
+                      <button onClick={()=>emitRoomChange(r.id)} className={`p-1.5 rounded ${activeRoomId===r.id? 'bg-teal-600 text-white':'bg-slate-700/70 text-slate-200 hover:bg-slate-600/70'}`} title="활성화">
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v10"/><path d="M6.5 11a5.5 5.5 0 1 0 11 0"/></svg>
+                      </button>
+                      <button onClick={()=>removeRoom(r.id)} className="p-1 text-slate-300 hover:text-red-400"><IconTrash className="w-4 h-4"/></button>
+                    </div>
+                  )
+                })}
+                <button onClick={addRoom} className="w-full py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/70 text-slate-200">+ 새 채팅</button>
+              </div>
+            </div>
+          )}
+
+          {mobileTab==='card' && (
+            <div className="space-y-3">
+              <div className="text-sm font-bold text-slate-300 text-center">카드</div>
+              <div>
+                <label htmlFor="m-card-name" className="block text-xs text-slate-400 mb-1">이름 {'{{char}}'}</label>
+                <LoreInput id="m-card-name" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2" value={cardName} onChange={cardDraftHandlers.name} onBlur={()=>commitCardDraft('name')} />
+              </div>
+              <div>
+                <label htmlFor="m-card-desc" className="block text-xs text-slate-400 mb-1">설명 {'{{char_description}}'}</label>
+                <LoreInput id="m-card-desc" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[160px]" value={cardDesc} onChange={cardDraftHandlers.desc} onBlur={()=>commitCardDraft('desc')} isTextarea />
+              </div>
+              <div>
+                <label htmlFor="m-card-go" className="block text-xs text-slate-400 mb-1">글로벌 노트 덮어쓰기</label>
+                <LoreInput id="m-card-go" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]" value={globalOverride} onChange={cardDraftHandlers.globalOverride} onBlur={()=>commitCardDraft('globalOverride')} isTextarea />
+              </div>
+              {/* 캐릭터 TTS (모바일) */}
+              <div className="space-y-2 bg-slate-800/30 p-3 rounded-lg border border-slate-700/50">
+                <div className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                  <span className="text-purple-400">🔊</span> 캐릭터 TTS
+                </div>
+                <div>
+                  <label htmlFor="m-tts-provider" className="block text-xs text-slate-400 mb-1">TTS 제공자</label>
+                  <select id="m-tts-provider" value={characterTTSProvider} onChange={(e)=>{ const p = e.target.value; setCharacterTTSProvider(p); if(p==='gemini'){ setCharacterTTSModel('gemini-2.5-flash-preview-tts'); } else { setCharacterTTSModel(''); } }} className="w-full px-2 py-1.5 bg-slate-800/60 border border-slate-700/50 rounded text-slate-100 text-xs">
+                    <option value="none">사용안함</option>
+                    <option value="gemini">Gemini (Google)</option>
+                    <option value="fishaudio">FishAudio</option>
+                  </select>
+                </div>
+                {characterTTSProvider==='gemini' && (
+                  <>
+                    <div>
+                      <label htmlFor="m-tts-model" className="block text-xs text-slate-400 mb-1">TTS 모델</label>
+                      <select id="m-tts-model" value={characterTTSModel || 'gemini-2.5-flash-preview-tts'} onChange={(e)=>setCharacterTTSModel(e.target.value)} className="w-full px-2 py-1.5 bg-slate-800/60 border border-slate-700/50 rounded text-slate-100 text-xs">
+                        <option value="gemini-2.5-flash-preview-tts">gemini-2.5-flash-preview-tts</option>
+                        <option value="gemini-2.5-pro-preview-tts">gemini-2.5-pro-preview-tts</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="m-tts-voice" className="block text-xs text-slate-400 mb-1">음성</label>
+                      <select id="m-tts-voice" value={characterTTSVoice} onChange={(e)=>setCharacterTTSVoice(e.target.value)} className="w-full px-2 py-1.5 bg-slate-800/60 border border-slate-700/50 rounded text-slate-100 text-xs">
+                        <option value="Achernar">Achernar (Soft · 여성)</option>
+                        <option value="Achird">Achird (Friendly · 남성)</option>
+                        <option value="Algenib">Algenib (Gravelly · 남성)</option>
+                        <option value="Algieba">Algieba (Smooth · 남성)</option>
+                        <option value="Alnilam">Alnilam (Firm · 남성)</option>
+                        <option value="Aoede">Aoede (Breezy · 여성)</option>
+                        <option value="Autonoe">Autonoe (Bright · 여성)</option>
+                        <option value="Callirrhoe">Callirrhoe (Easy-going · 여성)</option>
+                        <option value="Charon">Charon (Informative · 남성)</option>
+                        <option value="Despina">Despina (Smooth · 여성)</option>
+                        <option value="Enceladus">Enceladus (Breathy · 남성)</option>
+                        <option value="Erinome">Erinome (Clear · 여성)</option>
+                        <option value="Fenrir">Fenrir (Excitable · 남성)</option>
+                        <option value="Gacrux">Gacrux (Mature · 여성)</option>
+                        <option value="Iapetus">Iapetus (Clear · 남성)</option>
+                        <option value="Kore">Kore (Firm · 여성)</option>
+                        <option value="Laomedeia">Laomedeia (Upbeat · 여성)</option>
+                        <option value="Leda">Leda (Youthful · 여성)</option>
+                        <option value="Orus">Orus (Firm · 남성)</option>
+                        <option value="Pulcherrima">Pulcherrima (Forward · 여성)</option>
+                        <option value="Puck">Puck (Upbeat · 남성)</option>
+                        <option value="Rasalgethi">Rasalgethi (Informative · 남성)</option>
+                        <option value="Sadachbia">Sadachbia (Lively · 여성)</option>
+                        <option value="Sadaltager">Sadaltager (Knowledgeable · 남성)</option>
+                        <option value="Schedar">Schedar (Even · 남성)</option>
+                        <option value="Sulafat">Sulafat (Warm · 여성)</option>
+                        <option value="Umbriel">Umbriel (Easy-going · 남성)</option>
+                        <option value="Vindemiatrix">Vindemiatrix (Gentle · 여성)</option>
+                        <option value="Zephyr">Zephyr (Bright · 여성)</option>
+                        <option value="Zubenelgenubi">Zubenelgenubi (Casual · 남성)</option>
+                      </select>
+                    </div>
+                  </>
+                )}
+                {characterTTSProvider==='fishaudio' && (
+                  <div>
+                    <label htmlFor="m-tts-model-fish" className="block text-xs text-slate-400 mb-1">FishAudio 모델 ID</label>
+                    <input id="m-tts-model-fish" type="text" value={characterTTSModel} onChange={(e)=>setCharacterTTSModel(e.target.value)} className="w-full px-2 py-1.5 bg-slate-800/60 border border-slate-700/50 rounded text-slate-100 text-xs" placeholder="FishAudio 모델 ID 입력" />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {mobileTab==='lore' && (
+            <div className="space-y-3">
+              <div className="text-sm font-bold text-slate-300 text-center">로어북</div>
+              {/* Add button for convenience on mobile */}
+              <button className="w-full py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/70 text-slate-200" onClick={()=> {
+                const _lid = (crypto?.randomUUID ? crypto.randomUUID() : `l-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+                const nextItem = { _lid, keys: [], content: '', insertion_order: 0, enabled: true }
+                setLoreEntries(prev => ([...(prev||[]), nextItem]))
+                const key = String(_lid)
+                setOpenLoreIdx(prev => ({ ...prev, [key]: true }))
+              }}>+ 항목 추가</button>
+            </div>
+          )}
+
+          {mobileTab==='scripts' && (
+            <div className="space-y-3">
+              <div className="text-sm font-bold text-slate-300 text-center">스크립트</div>
+              <button className="w-full py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/70 text-slate-200" onClick={()=> {
+                const id = (crypto?.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+                const newItem: RegexScript = { id, name: '', type: 'display', in: '', out: '', flags: 'g', enabled: true }
+                setScripts(prev => ([...(prev||[]), newItem]))
+                const key = String(id)
+                setOpenScriptIdx(prev => ({ ...prev, [key]: true }))
+              }}>+ 스크립트 추가</button>
+            </div>
+          )}
         </div>
       </PanelWrapper>
     </>

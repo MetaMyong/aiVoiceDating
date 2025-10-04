@@ -182,7 +182,7 @@ export default function Sidebar({ onCardSelect, className }: { onCardSelect?: ()
   }
 
   return (
-    <aside className={`sidebar flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 border-r border-slate-700/50 ${className || ''}`}>
+    <aside className={`sidebar flex flex-col h-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 border-r border-slate-700/50 w-full md:w-[320px] lg:w-[360px] ${className || ''}`}>
       <div className="brand flex items-center gap-3 px-4 py-6">
         <svg width="48" height="48" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
           <defs>
@@ -221,17 +221,19 @@ export default function Sidebar({ onCardSelect, className }: { onCardSelect?: ()
         </div>
       </div>
   <input ref={fileRef} type="file" accept="image/png,image/jpeg,.charx,.zip,application/zip,application/x-zip-compressed" onChange={onFilesSelected} className="hidden" />
-      {/* Settings button */}
-      <button 
-        onClick={() => { window.location.href = '/settings'; }}
-        className="mt-4 w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-gradient-to-r from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 text-white transition-all shadow-lg hover:shadow-xl"
-        aria-label="설정"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19.4 13.3c.1-.6.1-1.2.1-1.8s0-1.2-.1-1.8l2-1.6c.2-.2.2-.5.1-.8l-1.9-3.3c-.1-.3-.4-.4-.7-.3l-2.4 1c-.5-.4-1-.7-1.6-.9L14.6.6c0-.3-.3-.5-.6-.5h-3.9c-.3 0-.6.2-.6.5L9 4.1c-.6.2-1.2.5-1.6.9L5 3.9c-.3-.1-.6 0-.7.3L2.4 7.5c-.1.3-.1.6.1.8l2 1.6c-.1.6-.1 1.2-.1 1.8s0 1.2.1 1.8l-2 1.6c-.2.2-.2.5-.1.8l1.9 3.3c.1.3.4.4.7.3l2.4-1c.5.4 1 .7 1.6.9l.2 3.5c0 .3.3.5.6.5h3.9c.3 0 .6-.2.6-.5l.2-3.5c.6-.2 1.1-.5 1.6-.9l2.4 1c.3.1.6 0 .7-.3l1.9-3.3c.1-.3.1-.6-.1-.8l-2-1.6zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z" />
-        </svg>
-        <span className="font-medium">설정</span>
-      </button>
+      {/* Settings button - 모바일에서도 하단 고정 */}
+      <div className="mt-auto px-4 pb-4">
+        <button 
+          onClick={() => { window.location.href = '/settings'; }}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-gradient-to-r from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 text-white transition-all shadow-lg hover:shadow-xl"
+          aria-label="설정"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19.4 13.3c.1-.6.1-1.2.1-1.8s0-1.2-.1-1.8l2-1.6c.2-.2.2-.5.1-.8l-1.9-3.3c-.1-.3-.4-.4-.7-.3l-2.4 1c-.5-.4-1-.7-1.6-.9L14.6.6c0-.3-.3-.5-.6-.5h-3.9c-.3 0-.6.2-.6.5L9 4.1c-.6.2-1.2.5-1.6.9L5 3.9c-.3-.1-.6 0-.7.3L2.4 7.5c-.1.3-.1.6.1.8l2 1.6c-.1.6-.1 1.2-.1 1.8s0 1.2.1 1.8l-2 1.6c-.2.2-.2.5-.1.8l1.9 3.3c.1.3.4.4.7.3l2.4-1c.5.4 1 .7 1.6.9l.2 3.5c0 .3.3.5.6.5h3.9c.3 0 .6-.2.6-.5l.2-3.5c.6-.2 1.1-.5 1.6-.9l2.4 1c.3.1.6 0 .7-.3l1.9-3.3c.1-.3.1-.6-.1-.8l-2-1.6zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z" />
+          </svg>
+          <span className="font-medium">설정</span>
+        </button>
+      </div>
     </aside>
   )
 }

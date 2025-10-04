@@ -242,15 +242,15 @@ export default function AudioSettings(props:any){
   return (
     <>
       {audioTab === 'record' && (
-        <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-8">
+  <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-4 md:p-8">
           <div className="absolute inset-0 bg-gradient-to-br from-teal-500/5 via-transparent to-cyan-500/5 pointer-events-none" />
           <div className="relative max-w-2xl mx-auto">
-            <div className="grid grid-cols-1 gap-6">
+            <div className="grid grid-cols-1 gap-4 md:gap-6">
               <div>
                 <label className="flex items-center gap-2 text-sm font-bold text-slate-300 mb-3">
                   <IconMic className="w-5 h-5 text-red-400" /> 녹음 장치 선택
                 </label>
-                <div className="flex gap-2 mt-2">
+                <div className="flex flex-col sm:flex-row gap-2 mt-2">
                   <select className="flex-1 rounded-lg border border-slate-700/50 bg-slate-800/60 text-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/50" value={selectedInputId} onChange={async e=>{ 
                     const v = e.target.value; 
                     const label = inputDevices.find(d=>d.deviceId===v)?.label || '';
@@ -269,7 +269,6 @@ export default function AudioSettings(props:any){
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <button type="button" onClick={()=>setMonitorOn((x:boolean)=>!x)} className={`px-3 py-2 rounded border ${monitorOn? 'bg-teal-600 text-white border-teal-500/60':'bg-slate-700/60 text-slate-200 border-slate-600/60 hover:bg-slate-600/70'}`}>{monitorOn? 'MONITOR ON':'MONITOR OFF'}</button>
-                    <div className="text-sm text-slate-400">모니터 레벨</div>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="w-56">
@@ -295,7 +294,7 @@ export default function AudioSettings(props:any){
         </section>
       )}
       {audioTab === 'play' && (
-        <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-8">
+  <section className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-slate-800/40 to-slate-900/60 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-700/50 p-4 md:p-8">
           <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 via-transparent to-emerald-500/5 pointer-events-none" />
           <div className="relative max-w-2xl mx-auto">
             <div className="grid grid-cols-1 gap-6">
@@ -303,7 +302,7 @@ export default function AudioSettings(props:any){
                 <label className="flex items-center gap-2 text-sm font-bold text-slate-300 mb-3">
                   <IconVolume className="w-5 h-5 text-green-400" /> 재생 장치 선택
                 </label>
-                <div className="flex gap-2 mt-2">
+                <div className="flex flex-col sm:flex-row gap-2 mt-2">
                   <select className="flex-1 rounded-lg border border-slate-700/50 bg-slate-800/60 text-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/50" value={selectedOutputId} onChange={async e=>{ 
                     const v = e.target.value; 
                     const label = outputDevices.find(d=>d.deviceId===v)?.label || '';
