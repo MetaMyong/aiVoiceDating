@@ -1,13 +1,31 @@
 import React from 'react'
-import { getSettings } from './lib/indexeddb'
+import { getSettings, setSettings } from './lib/indexeddb'
 import Chat from './components/Chat'
 import Sidebar from './components/Sidebar'
 import SettingsPage from './pages/SettingsPage'
 import ToastContainer from './components/Toast'
+import CharacterSidePanel from './components/CharacterSidePanel'
 
 export default function App(){
   const [hasSelectedCard, setHasSelectedCard] = React.useState<boolean>(false)
   const [showMobileSidebar, setShowMobileSidebar] = React.useState<boolean>(false)
+  const [panelOpen, setPanelOpen] = React.useState(false)
+  const [panelPersonaIndex, setPanelPersonaIndex] = React.useState<number>(0)
+  const [panelPersona, setPanelPersona] = React.useState<any | null>(null)
+  const closeTimerRef = React.useRef<number | null>(null)
+  const PANEL_ANIMATION_MS = 720
+
+  const closePanelWithDelay = React.useCallback(() => {
+    if (closeTimerRef.current) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+    setPanelOpen(false)
+    closeTimerRef.current = window.setTimeout(() => {
+      setPanelPersona(null)
+      closeTimerRef.current = null
+    }, PANEL_ANIMATION_MS)
+  }, [PANEL_ANIMATION_MS])
 
   React.useEffect(() => {
     const check = async () => {
@@ -21,11 +39,64 @@ export default function App(){
     const onChange = () => check()
     window.addEventListener('characterSelectionChanged', onChange as any)
     window.addEventListener('characterCardsUpdate', onChange as any)
+    const onOpenEditor = async (e: any) => {
+      try{
+        const cfg = await getSettings()
+        if (closeTimerRef.current) {
+          window.clearTimeout(closeTimerRef.current)
+          closeTimerRef.current = null
+        }
+        const list = cfg?.characterCards || []
+        const index = e?.detail?.index ?? cfg?.selectedCharacterCardIndex ?? 0
+        // 안전장치: 페르소나 배열이 없으면 settings.personas를 이용해 최소한 이름/설명만 구성
+        let persona = null
+        if (Array.isArray(cfg?.personas) && typeof cfg?.selectedPersonaIndex === 'number') {
+          persona = cfg.personas[cfg.selectedPersonaIndex] || null
+        }
+        // Sidebar의 characterCards 항목을 페르소나 모델로 투영: 이름/설명은 card.data 우선
+        const cardItem = list[index]
+        const card = cardItem?.card || null
+        const name = card?.data?.name || persona?.name || cardItem?.name || '이름 없음'
+        const description = card?.data?.description || persona?.description || ''
+        const avatar = cardItem?.dataUrl || persona?.avatar || ''
+        const mergedPersona = { name, description, avatar, characterData: card || persona?.characterData || null }
+        setPanelPersonaIndex(index)
+        setPanelPersona(mergedPersona)
+        setPanelOpen(true)
+      }catch{}
+    }
+    window.addEventListener('openCardEditor', onOpenEditor as any)
     return () => {
       window.removeEventListener('characterSelectionChanged', onChange as any)
       window.removeEventListener('characterCardsUpdate', onChange as any)
+      window.removeEventListener('openCardEditor', onOpenEditor as any)
     }
   }, [])
+
+  React.useEffect(() => () => {
+    if (closeTimerRef.current) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }, [])
+
+  async function handlePanelSave(updated: any){
+    try{
+      const cfg = (await getSettings()) || {}
+      // Sidebar의 characterCards에도 card JSON 반영 (사이드바에서 연 경우)
+      if (Array.isArray(cfg.characterCards)){
+        const cc = cfg.characterCards.slice()
+        const it = cc[panelPersonaIndex] || {}
+        cc[panelPersonaIndex] = { ...it, name: updated?.name || it.name, card: updated?.characterData || it.card }
+        cfg.characterCards = cc
+      }
+      // personas는 이 경로에서는 절대 추가/수정하지 않는다 (의도치 않은 추가 방지)
+      await setSettings(cfg)
+      window.dispatchEvent(new CustomEvent('characterCardsUpdate'))
+      setPanelPersona(updated)
+      closePanelWithDelay()
+    }catch{}
+  }
 
   return (
     <div className="app justify-center">
@@ -75,6 +146,15 @@ export default function App(){
             )}
 
             <Sidebar className="hidden md:flex" />
+            {panelPersona && (
+              <CharacterSidePanel
+                open={panelOpen}
+                onClose={closePanelWithDelay}
+                personaIndex={panelPersonaIndex}
+                persona={panelPersona}
+                onChange={handlePanelSave}
+              />
+            )}
             {hasSelectedCard ? (
               <Chat />
             ) : (

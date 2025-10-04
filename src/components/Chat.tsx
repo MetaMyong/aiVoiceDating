@@ -128,8 +128,8 @@ export default function Chat(){
         window.addEventListener('chatRoomChanged', onRoomChange as any)
         
         // Load initial room or default
-        const cfg = await getSettings()
-        const cardIdx = cfg?.selectedCharacterCardIndex
+  const cfg = await getSettings()
+  const cardIdx = cfg?.selectedCharacterCardIndex
         let roomId = 'default'
         if (typeof cardIdx === 'number') {
           const activeRoom = await getActiveChatRoom(cardIdx)
@@ -155,7 +155,15 @@ export default function Chat(){
           const rs = card?.data?.extensions?.risuai?.customScripts || [];
           normalized = Array.isArray(rs)
             ? rs
-                .map((r: any): RegexScript => ({ in: r.in || r.regex_in || '', out: r.out || r.regex_out || '', flags: r.flags || 'g', type: 'display', enabled: true }))
+                .map((r: any): RegexScript => ({
+                  id: r.id,
+                  name: r.name || r.title || '',
+                  type: (r.type === 'input' || r.type === 'output' || r.type === 'request' || r.type === 'display' || r.type === 'disabled') ? r.type : 'display',
+                  in: r.in || r.regex_in || '',
+                  out: r.out || r.regex_out || '',
+                  flags: r.flags || 'g',
+                  enabled: r.enabled !== false
+                }))
                 .filter((r: RegexScript) => r.in && (r.out!==undefined))
             : [];
         }

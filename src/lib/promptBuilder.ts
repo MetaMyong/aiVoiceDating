@@ -29,13 +29,19 @@ export async function buildPromptMessages(blocks: PromptBlock[], conversationHis
   const selectedPersonaIndex = settings?.selectedPersonaIndex ?? 0;
   const personas = settings?.personas || [];
   const selectedPersona = personas[selectedPersonaIndex];
+  const characterCards = Array.isArray(settings?.characterCards) ? settings.characterCards : [];
+  const selectedCharacterCardIndex = (typeof settings?.selectedCharacterCardIndex === 'number') ? settings.selectedCharacterCardIndex : null;
+  const selectedCardEntry = (selectedCharacterCardIndex !== null) ? characterCards[selectedCharacterCardIndex] : null;
+  const cardFromSelection = selectedCardEntry?.card || selectedCardEntry?.characterData || null;
+  const effectiveCard = cardFromSelection || selectedPersona?.characterData || null;
   
   // 치환할 변수들
   const variables: Record<string, string> = {
     user: selectedPersona?.name || 'User',
     user_description: selectedPersona?.description || '',
-    char: (selectedPersona?.characterData?.data?.name) || selectedPersona?.name || '',
-    char_description: (selectedPersona?.characterData?.data?.description) || selectedPersona?.description || '',
+    // char/char_description MUST reflect the character card only; do not fall back to persona/user values
+    char: (effectiveCard?.data?.name) || (selectedCardEntry?.name) || '',
+    char_description: (effectiveCard?.data?.description) || (selectedCardEntry?.description) || '',
   };
   
   // Custom Lorebook from Settings (설정의 커스텀 로어북)
@@ -52,9 +58,9 @@ export async function buildPromptMessages(blocks: PromptBlock[], conversationHis
       messages.push({ role: b.role, content: processedPrompt });
     } else if (b.type === 'lorebook' || b.type === 'author_notes' || b.type === 'global_override') {
       // CCv3 기반 자동 생성 블록
-      const card = selectedPersona?.characterData;
+  const card = effectiveCard;
       let content = '';
-      if (card && card.spec === 'chara_card_v3' && card.data) {
+  if (card && card.spec === 'chara_card_v3' && card.data) {
         if (b.type === 'lorebook') {
           const entries = card.data?.character_book?.entries || [];
           const sorted = [...entries].sort((a:any,b:any) => (a.insertion_order ?? 0) - (b.insertion_order ?? 0));

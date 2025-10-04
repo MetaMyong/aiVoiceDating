@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { IconDownload, IconUpload, IconCamera, IconTrash, IconUser } from '../../components/Icons'
+import { IconDownload, IconUpload, IconCamera, IconTrash, IconUser, IconCog } from '../../components/Icons'
 import { pushToast } from '../../components/Toast'
+import CharacterSidePanel from '../../components/CharacterSidePanel'
+import { setSettings as idbSetSettings, getSettings as idbGetSettings } from '../../lib/indexeddb'
 
 interface Persona {
   name: string
@@ -15,6 +17,7 @@ export default function PersonaSettings(props: any) {
   const [selectedIndex, setSelectedIndex] = useState<number>(cfg?.selectedPersonaIndex ?? 0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const avatarInputRef = useRef<HTMLInputElement>(null)
+  const [panelOpen, setPanelOpen] = useState(false)
 
   const selectedPersona = personas[selectedIndex] || null
 
@@ -63,7 +66,7 @@ export default function PersonaSettings(props: any) {
         const type = String.fromCharCode(uint8[pos], uint8[pos + 1], uint8[pos + 2], uint8[pos + 3])
         pos += 4
 
-        // tEXt 청크에서 캐릭터 데이터 찾기 (chara, persona 등)
+        // tEXt 청크에서 캐릭터 데이터 찾기 (ccv3, chara, persona 등)
         if (type === 'tEXt') {
           let keyEnd = pos
           while (keyEnd < pos + length && uint8[keyEnd] !== 0) {
@@ -71,8 +74,8 @@ export default function PersonaSettings(props: any) {
           }
           const key = String.fromCharCode(...Array.from(uint8.slice(pos, keyEnd)))
           
-          // 'chara' 또는 'persona' 키 지원
-          if (key === 'chara' || key === 'persona') {
+          // 'ccv3' (RisuAI chara_card_v3), 'chara' 또는 'persona' 키 지원
+          if (key === 'ccv3' || key === 'chara' || key === 'persona') {
             const dataStart = keyEnd + 1
             const dataEnd = pos + length
             const data = uint8.slice(dataStart, dataEnd)
@@ -138,16 +141,28 @@ export default function PersonaSettings(props: any) {
         const base64 = event.target?.result as string
         
         // 다양한 형식 지원
-        const newPersona: Persona = {
-          name: characterData.name || characterData.char_name || '이름 없음',
-          description: characterData.description || characterData.personaPrompt || characterData.personality || '',
-          avatar: base64,
-          characterData: characterData
+        let name = '이름 없음'
+        let description = ''
+        if (characterData?.spec === 'chara_card_v3' && characterData?.data) {
+          name = characterData.data.name || '이름 없음'
+          description = characterData.data.description || characterData.data.personality || ''
+        } else {
+          name = characterData.name || characterData.char_name || '이름 없음'
+          description = characterData.description || characterData.personaPrompt || characterData.personality || ''
         }
+
+        const newPersona: Persona = { name, description, avatar: base64, characterData }
 
         const updated = [...personas, newPersona]
         setPersonas(updated)
         setSelectedIndex(updated.length - 1)
+        // Persist immediately to avoid rollback on later global save merges
+        ;(async ()=>{
+          try{
+            const latest = await idbGetSettings()
+            await idbSetSettings({ ...(latest||{}), personas: updated, selectedPersonaIndex: updated.length - 1 })
+          }catch(e){ /* non-fatal */ }
+        })()
         
         pushToast(`"${newPersona.name}" 캐릭터 카드를 불러왔습니다`, 'success')
       }
@@ -195,8 +210,8 @@ export default function PersonaSettings(props: any) {
         uint8[i] = binaryImage.charCodeAt(i)
       }
 
-      // tEXt 청크 생성 (persona 키 사용)
-      const keyword = 'persona'
+  // tEXt 청크 생성 (ccv3 또는 persona 키 사용)
+  const keyword = (exportData?.spec === 'chara_card_v3') ? 'ccv3' : 'persona'
       const keywordBytes = new TextEncoder().encode(keyword)
       const dataBytes = new TextEncoder().encode(base64Data)
       const chunkData = new Uint8Array(keywordBytes.length + 1 + dataBytes.length)
@@ -342,6 +357,19 @@ export default function PersonaSettings(props: any) {
     setPersonas(updated)
   }
 
+  function applyPersonaFromPanel(updatedPersona: Persona) {
+    const updated = [...personas]
+    updated[selectedIndex] = { ...updatedPersona }
+    setPersonas(updated)
+    // Also persist panel changes immediately
+    ;(async ()=>{
+      try{
+        const latest = await idbGetSettings()
+        await idbSetSettings({ ...(latest||{}), personas: updated, selectedPersonaIndex: selectedIndex })
+      }catch(e){}
+    })()
+  }
+
   return (
     <div className="space-y-6">
       {/* 페르소나 갤러리 - 프리미엄 글래스모픽 디자인 */}
@@ -360,6 +388,17 @@ export default function PersonaSettings(props: any) {
             )}
           </div>
           <div className="flex gap-3">
+            {selectedPersona && (
+              <button
+                onClick={()=>setPanelOpen(true)}
+                className="group relative px-5 py-2.5 bg-gradient-to-r from-slate-700/90 to-slate-600/90 hover:from-slate-600 hover:to-slate-500 text-slate-100 text-sm font-semibold rounded-xl shadow-lg shadow-slate-700/30 hover:shadow-slate-600/50 transition-all duration-300 overflow-hidden"
+              >
+                <span className="relative z-10 flex items-center gap-2">
+                  <IconCog className="w-5 h-5" /> 편집
+                </span>
+                <div className="absolute inset-0 bg-gradient-to-r from-slate-400/0 via-slate-400/10 to-slate-400/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
+              </button>
+            )}
             <button
               onClick={handleImportCard}
               className="group relative px-5 py-2.5 bg-gradient-to-r from-blue-600/90 to-blue-500/90 hover:from-blue-500 hover:to-blue-400 text-slate-100 text-sm font-semibold rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-400/50 transition-all duration-300 overflow-hidden"
@@ -518,6 +557,17 @@ export default function PersonaSettings(props: any) {
         onChange={handleAvatarSelect}
         className="hidden"
       />
+
+      {/* 캐릭터 사이드패널 */}
+      {selectedPersona && (
+        <CharacterSidePanel
+          open={panelOpen}
+          onClose={()=>setPanelOpen(false)}
+          personaIndex={selectedIndex}
+          persona={selectedPersona}
+          onChange={applyPersonaFromPanel}
+        />
+      )}
     </div>
   )
 }
