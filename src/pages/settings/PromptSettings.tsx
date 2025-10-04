@@ -4,7 +4,7 @@ import { setSettings as idbSetSettings } from '../../lib/indexeddb'
 export type PromptBlock = {
   id: string
   name: string
-  type: 'pure' | 'conversation' | 'longterm' | 'system'
+  type: 'pure' | 'conversation' | 'longterm' | 'system' | 'lorebook' | 'author_notes' | 'global_override' | 'final_insert'
   prompt?: string
   role: 'user' | 'assistant' | 'system'
   startIndex?: number
@@ -283,6 +283,17 @@ export default function PromptSettings(props: any){
                               updateBlockField(i, { type: 'conversation', prompt: '', name: '대화 이력', role: 'user', count: 10 })
                             } else if (val === 'system') {
                               updateBlockField(i, { type: 'system', name: '시스템 프롬프트', role: 'system' })
+                            } else if (val === 'lorebook') {
+                              // 자동: 로어북을 배치 순서대로 여러 메시지로 삽입
+                              updateBlockField(i, { type: 'lorebook', name: '로어북', prompt: '', role: b.role || 'user' })
+                            } else if (val === 'final_insert') {
+                              // 자동: @@depth 0 로 시작하는 프롬프트를 최종 삽입
+                              updateBlockField(i, { type: 'final_insert', name: '최종 삽입', prompt: '', role: b.role || 'user' })
+                            } else if (val === 'global_override') {
+                              // 자동: 캐릭터 카드 글로벌 노트 덮어쓰기
+                              updateBlockField(i, { type: 'global_override', name: '글로벌 노트 덮어쓰기', prompt: '', role: b.role || 'system' })
+                            } else if (val === 'author_notes') {
+                              updateBlockField(i, { type: 'author_notes', name: '작가의 노트', prompt: '', role: b.role || 'system' })
                             } else {
                               updateBlockField(i, { type: val })
                             }
@@ -294,6 +305,10 @@ export default function PromptSettings(props: any){
                           <option value="pure">순수 프롬프트</option>
                           <option value="conversation">대화</option>
                           <option value="longterm">장기기억</option>
+                          <option value="global_override">글로벌 노트 덮어쓰기</option>
+                          <option value="lorebook">로어북</option>
+                          <option value="final_insert">최종 삽입</option>
+                          <option value="author_notes">작가의 노트</option>
                         </select>
                       </div>
                       <div>
@@ -356,19 +371,27 @@ export default function PromptSettings(props: any){
                       </div>
                     ) : (
                       <div>
-                        <label className="block text-xs text-slate-300" htmlFor={`prompt-${b.id}`}>프롬프트 내용</label>
-                        <textarea
-                          id={`prompt-${b.id}`}
-                          name={`prompt-${b.id}`}
-                          className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 placeholder-slate-500 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
-                          rows={6}
-                          defaultValue={b.prompt}
-                          onChange={(e) => {
-                            // Update ref only, no state change
-                            promptDraftsRef.current[b.id] = e.target.value
-                          }}
-                          draggable={false}
-                        />
+                        {(['lorebook','global_override','author_notes','final_insert'] as PromptBlock['type'][]).includes(b.type) ? (
+                          <div className="text-xs text-slate-400">
+                            이 블록은 자동으로 내용을 채웁니다. 입력란이 필요하지 않습니다.
+                          </div>
+                        ) : (
+                          <>
+                            <label className="block text-xs text-slate-300" htmlFor={`prompt-${b.id}`}>프롬프트 내용</label>
+                            <textarea
+                              id={`prompt-${b.id}`}
+                              name={`prompt-${b.id}`}
+                              className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 placeholder-slate-500 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
+                              rows={6}
+                              defaultValue={b.prompt}
+                              onChange={(e) => {
+                                // Update ref only, no state change
+                                promptDraftsRef.current[b.id] = e.target.value
+                              }}
+                              draggable={false}
+                            />
+                          </>
+                        )}
                       </div>
                     )}
                   </div>

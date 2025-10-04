@@ -60,3 +60,16 @@ export const setActiveChatRoom = async (cardIndex: number, roomId: string | null
   const key = `activeChatRoom::${cardIndex}`;
   await dbSet(key, roomId);
 };
+
+// Per-room author notes (session-scoped per chat room)
+export const getRoomAuthorNotes = async (roomId: string) => {
+  if (!roomId) return '';
+  const key = `roomAuthorNotes::${roomId}`;
+  const v = await dbGet(key);
+  return (typeof v === 'string') ? v : '';
+};
+export const setRoomAuthorNotes = async (roomId: string, notes: string) => {
+  if (!roomId) return;
+  const key = `roomAuthorNotes::${roomId}`;
+  await dbSet(key, String(notes || ''));
+};

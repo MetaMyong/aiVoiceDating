@@ -5,7 +5,7 @@ import { dbGet } from './indexeddb';
 // convId: optional conversation id (string) to load history from conversations/<id>.json on server side via API —
 // in this frontend-only helper we'll accept a history array passed in by caller.
 
-export type PromptBlock = { name:string, type: 'pure'|'conversation'|'longterm'|'system'|'lorebook'|'author_notes'|'global_override', prompt:string, role: 'user'|'assistant'|'system', count?: number, startIndex?: number, endIndex?: number };
+export type PromptBlock = { name:string, type: 'pure'|'conversation'|'longterm'|'system'|'lorebook'|'author_notes'|'global_override'|'final_insert', prompt:string, role: 'user'|'assistant'|'system', count?: number, startIndex?: number, endIndex?: number };
 
 export type BuildOptions = {
   authorNotes?: string; // session-scoped author notes (현재 채팅 한정)
@@ -47,6 +47,14 @@ export async function buildPromptMessages(blocks: PromptBlock[], conversationHis
   // Custom Lorebook from Settings (설정의 커스텀 로어북)
   const customLorebook: Array<any> = Array.isArray(settings?.customLorebook) ? settings.customLorebook : [];
 
+  // Helper: identify entries to hide (folders)
+  const isFolderEntry = (entry: any): boolean => {
+    const keys = entry?.keys;
+    if (Array.isArray(keys)) return keys.some((k: any) => typeof k === 'string' && k.toLowerCase().includes('folder'));
+    if (typeof keys === 'string') return keys.toLowerCase().includes('folder');
+    return false;
+  };
+
   for (const b of blocks) {
     // 프롬프트 내용에서 변수 치환
     const processedPrompt = replaceVariables(b.prompt || '', variables);
@@ -56,34 +64,70 @@ export async function buildPromptMessages(blocks: PromptBlock[], conversationHis
       messages.push({ role: 'system', content: processedPrompt });
     } else if (b.type === 'pure') {
       messages.push({ role: b.role, content: processedPrompt });
-    } else if (b.type === 'lorebook' || b.type === 'author_notes' || b.type === 'global_override') {
+    } else if (b.type === 'lorebook' || b.type === 'author_notes' || b.type === 'global_override' || b.type === 'final_insert') {
       // CCv3 기반 자동 생성 블록
-  const card = effectiveCard;
-      let content = '';
-  if (card && card.spec === 'chara_card_v3' && card.data) {
-        if (b.type === 'lorebook') {
-          const entries = card.data?.character_book?.entries || [];
-          const sorted = [...entries].sort((a:any,b:any) => (a.insertion_order ?? 0) - (b.insertion_order ?? 0));
-          const fromCard = sorted.map((e:any) => (typeof e.content === 'string' ? e.content : '')).filter(Boolean);
-          // Merge custom lorebook entries from settings (always/alwaysCurrentChat만 포함)
-          const customActive = customLorebook
-            .filter((x:any) => x && x.enabled !== false && (x.always === true || x.alwaysCurrentChat === true))
-            .sort((a:any,b:any) => (Number(a.order)||0) - (Number(b.order)||0))
-            .map((x:any) => String(x.prompt || '')).filter(Boolean);
-          content = [...fromCard, ...customActive].join('\n\n');
-        } else if (b.type === 'author_notes') {
-          // 작가의 노트: 카드의 creator_notes가 아니라, 현재 채팅 한정의 사용자 입력을 사용
-          content = String(opts?.authorNotes || settings?.sessionAuthorNotes || '');
-        } else if (b.type === 'global_override') {
-          content = card.data?.post_history_instructions || '';
+      const card = effectiveCard;
+
+      // For lorebook/final_insert we may produce multiple messages by insertion order
+      if (b.type === 'lorebook' || b.type === 'final_insert') {
+        const entries: any[] = (card && card.spec === 'chara_card_v3' && card.data)
+          ? (Array.isArray(card.data?.character_book?.entries) ? card.data.character_book.entries : [])
+          : [];
+
+        // Filter out disabled/folder entries and non-string contents
+        const cleaned = entries
+          .filter((e:any) => e && e.enabled !== false && typeof e.content === 'string' && !isFolderEntry(e));
+
+        // Split depth prompts (content starting with "@@depth 0")
+        const isDepthPrompt = (txt: string) => txt.trim().startsWith('@@depth 0');
+
+        // Collect items list (order, content) while excluding/including based on type
+        const items: Array<{ order: number, content: string }> = [];
+        for (const e of cleaned) {
+          const contentStr = String(e.content || '');
+          const depth = isDepthPrompt(contentStr);
+          const shouldInclude = b.type === 'final_insert' ? depth : !depth;
+          if (!shouldInclude) continue;
+          const order = Number(e.insertion_order ?? 0) || 0;
+          items.push({ order, content: contentStr });
         }
-      } else {
-        // v2 등 구버전 호환
-        if (b.type === 'author_notes') content = String(opts?.authorNotes || settings?.sessionAuthorNotes || '');
-        if (b.type === 'global_override') content = selectedPersona?.characterData?.data?.post_history_instructions || '';
+
+        // Merge custom lorebook as well for non-depth only (유지보수: depth 구문이 있으면 final_insert로 보냄)
+        const customActive = customLorebook
+          .filter((x:any) => x && x.enabled !== false && (x.always === true || x.alwaysCurrentChat === true))
+          .map((x:any) => ({ content: String(x.prompt || ''), order: Number(x.order) }))
+          .filter((x:any) => x.content);
+
+        for (const item of customActive) {
+          const depth = isDepthPrompt(item.content);
+          const shouldInclude = b.type === 'final_insert' ? depth : !depth;
+          if (!shouldInclude) continue;
+          const order = Number.isFinite(item.order) ? (item.order as number) : Number.MAX_SAFE_INTEGER;
+          items.push({ order, content: item.content });
+        }
+
+        // Sort by numeric order and push one message per item (배치 순서대로 항목 수만큼 메시지 생성)
+        items.sort((a,b) => a.order - b.order);
+        for (const it of items) {
+          const finalText = replaceVariables(it.content, variables);
+          if (finalText.trim().length > 0) messages.push({ role: b.role, content: finalText });
+        }
+      } else if (b.type === 'author_notes') {
+        // 작가의 노트: 카드 creator_notes가 아니라, 현재 채팅 한정 사용자 입력을 사용
+        const content = String(opts?.authorNotes || settings?.sessionAuthorNotes || '');
+        const finalText = replaceVariables(content || '', variables);
+        messages.push({ role: b.role, content: finalText });
+      } else if (b.type === 'global_override') {
+        let content = '';
+        if (card && card.spec === 'chara_card_v3' && card.data) {
+          content = card.data?.post_history_instructions || '';
+        } else {
+          // v2 등 구버전 호환
+          content = selectedPersona?.characterData?.data?.post_history_instructions || '';
+        }
+        const finalText = replaceVariables(content || '', variables);
+        messages.push({ role: b.role, content: finalText });
       }
-      const finalText = replaceVariables(content || '', variables);
-      messages.push({ role: b.role, content: finalText });
     } else if (b.type === 'conversation') {
       // If startIndex/endIndex provided, use them with reverse indexing semantics:
       // - startIndex: 0 means the most recent (last) message, 1 means second most recent, etc.

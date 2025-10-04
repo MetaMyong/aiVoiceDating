@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef, useCallback } from 'react'
-import { getChatRooms, setChatRooms, getActiveChatRoom, setActiveChatRoom } from '../lib/indexeddb'
+import { getChatRooms, setChatRooms, getActiveChatRoom, setActiveChatRoom, getRoomAuthorNotes, setRoomAuthorNotes } from '../lib/indexeddb'
 import { IconTrash, IconCog, IconNote } from './Icons'
 
 type RegexScript = {
@@ -122,7 +122,7 @@ type Props = {
 
 const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, onChange }: Props) => {
   const [rooms, setRooms] = useState<Array<{ id: string, name: string }>>([])
-  const [activeRoomId, setActiveRoomIdLocal] = useState<string>('')
+  const [activeRoomId, setActiveRoomIdLocal] = useState<string>('default')
   const [leftOffset, setLeftOffset] = useState<number>(0)
   const asideRef = useRef<HTMLElement | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -166,6 +166,7 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   const [characterTTSProvider, setCharacterTTSProvider] = useState<string>(v3.data.extensions?.characterTTS?.provider || 'none')
   const [characterTTSModel, setCharacterTTSModel] = useState<string>(v3.data.extensions?.characterTTS?.model || '')
   const [characterTTSVoice, setCharacterTTSVoice] = useState<string>(v3.data.extensions?.characterTTS?.voice || 'Zephyr')
+  const [authorNotes, setAuthorNotes] = useState<string>('')
   
   // Use ref for drafts to avoid re-renders
   const cardDraftsRef = useRef({
@@ -195,6 +196,20 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     else if (field === 'desc') setCardDesc(cardDraftsRef.current.desc)
     else if (field === 'globalOverride') setGlobalOverride(cardDraftsRef.current.globalOverride)
   }, [])
+
+  // Author notes (per-room). Keep a separate draft to mirror existing pattern
+  const authorNotesDraftRef = useRef<string>('')
+  const commitAuthorNotesDraft = useCallback(async () => {
+    const text = authorNotesDraftRef.current
+    setAuthorNotes(text)
+    const rid = activeRoomId || 'default'
+    try { await setRoomAuthorNotes(rid, text) } catch {}
+    // Notify others (e.g., Chat) that author notes changed
+    try {
+      const evt = new CustomEvent('authorNotesChanged', { detail: { roomId: rid, notes: text } })
+      window.dispatchEvent(evt)
+    } catch {}
+  }, [activeRoomId])
   
   const [loreEntries, setLoreEntries] = useState<any[]>(() => {
     const raw = Array.isArray(v3.data?.character_book?.entries) ? v3.data.character_book.entries : []
@@ -424,7 +439,10 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
       const list = await getChatRooms(personaIndex)
       setRooms(Array.isArray(list) ? list : [])
       const active = await getActiveChatRoom(personaIndex)
-      setActiveRoomIdLocal(active || '')
+      const rid0 = active || 'default'
+      setActiveRoomIdLocal(rid0)
+      // Load author notes for the active room
+      try { const an = await getRoomAuthorNotes(rid0); setAuthorNotes(an || ''); authorNotesDraftRef.current = an || '' } catch {}
     })()
   }, [personaIndex])
   
@@ -517,6 +535,10 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     // Notify Chat component
     const evt = new CustomEvent('chatRoomChanged', { detail: { roomId } })
     window.dispatchEvent(evt)
+    // Load author notes for new room
+    ;(async ()=>{
+      try { const an = await getRoomAuthorNotes(roomId); setAuthorNotes(an || ''); authorNotesDraftRef.current = an || '' } catch {}
+    })()
   }
 
   const addRoom = async () => {
@@ -640,6 +662,8 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     console.log('[CharacterSidePanel] Saving characterTTS:', characterTTSConfig)
     console.log('[CharacterSidePanel] Final lore entries count:', finalLoreEntries.length)
     console.log('[CharacterSidePanel] Final scripts count:', finalScripts.length)
+    // Save current author notes draft for this room
+    try { setRoomAuthorNotes(activeRoomId || 'default', authorNotesDraftRef.current ?? authorNotes) } catch {}
     onChange(next)
   }
 
@@ -771,6 +795,19 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                 value={globalOverride}
                 onChange={cardDraftHandlers.globalOverride}
                 onBlur={() => commitCardDraft('globalOverride')}
+                isTextarea
+              />
+            </div>
+
+            {/* Author Notes (session scoped per room) */}
+            <div>
+              <label htmlFor="card-author-notes" className="block text-xs text-slate-400 mb-1">작가의 노트</label>
+              <LoreInput
+                id="card-author-notes"
+                className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]"
+                value={authorNotes}
+                onChange={(v)=>{ authorNotesDraftRef.current = v; /* optional live dispatch */ try { const evt = new CustomEvent('authorNotesChanged', { detail: { roomId: activeRoomId || 'default', notes: v } }); window.dispatchEvent(evt) } catch {} }}
+                onBlur={commitAuthorNotesDraft}
                 isTextarea
               />
             </div>
@@ -1117,6 +1154,10 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
               <div>
                 <label htmlFor="m-card-go" className="block text-xs text-slate-400 mb-1">글로벌 노트 덮어쓰기</label>
                 <LoreInput id="m-card-go" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]" value={globalOverride} onChange={cardDraftHandlers.globalOverride} onBlur={()=>commitCardDraft('globalOverride')} isTextarea />
+              </div>
+              <div>
+                <label htmlFor="m-author-notes" className="block text-xs text-slate-400 mb-1">작가의 노트</label>
+                <LoreInput id="m-author-notes" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]" value={authorNotes} onChange={(v)=>{ authorNotesDraftRef.current = v; try { const evt = new CustomEvent('authorNotesChanged', { detail: { roomId: activeRoomId || 'default', notes: v } }); window.dispatchEvent(evt) } catch {} }} onBlur={commitAuthorNotesDraft} isTextarea />
               </div>
               {/* 캐릭터 TTS (모바일) */}
               <div className="space-y-2 bg-slate-800/30 p-3 rounded-lg border border-slate-700/50">

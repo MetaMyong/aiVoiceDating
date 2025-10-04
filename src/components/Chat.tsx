@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { getSettings, getConversationHistory, saveConversationHistory, getActiveChatRoom } from '../lib/indexeddb'
+import { getSettings, getConversationHistory, saveConversationHistory, getActiveChatRoom, getRoomAuthorNotes } from '../lib/indexeddb'
 import { buildPromptMessages, PromptBlock } from '../lib/promptBuilder'
 
 interface Message {
@@ -66,8 +66,11 @@ export default function Chat(){
   const [regexScripts, setRegexScripts] = useState<RegexScript[]>([]);
   const [personaCard, setPersonaCard] = useState<any>(null);
   const [assetMap, setAssetMap] = useState<Record<string,string>>({});
+  const [roomAuthorNotes, setRoomAuthorNotes] = useState<string>('');
   // Typing animation lead time to run slightly faster than TTS (in ms)
   const TYPING_LEAD_MS = 500;
+  // Keep latest active room id for event handlers
+  const activeRoomIdRef = useRef<string>('default');
   
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -123,21 +126,32 @@ export default function Chat(){
   // Load conversation history on mount
   useEffect(() => {
     (async () => {
+      let onRoomChangeFn: any = null;
+      let onAuthorNotesChangedFn: any = null;
       try {
         // Listen for chat room changes
-        const onRoomChange = async (e: any) => {
+        onRoomChangeFn = async (e: any) => {
           const roomId = e.detail?.roomId || 'default'
           setActiveRoomId(roomId)
+          activeRoomIdRef.current = roomId
           const history = await getConversationHistory(roomId)
           if (history && Array.isArray(history)) {
             setMessages(history)
           } else {
             setMessages([])
           }
+          try { const an = await getRoomAuthorNotes(roomId); setRoomAuthorNotes(an || '') } catch {}
         }
-        window.addEventListener('chatRoomChanged', onRoomChange as any)
+        window.addEventListener('chatRoomChanged', onRoomChangeFn as any)
+        onAuthorNotesChangedFn = (e: any) => {
+          const rid = e.detail?.roomId
+          const notes = e.detail?.notes
+          if (!rid || rid !== (activeRoomIdRef.current || 'default')) return
+          if (typeof notes === 'string') setRoomAuthorNotes(notes)
+        }
+        window.addEventListener('authorNotesChanged', onAuthorNotesChangedFn as any)
         
-        // Load initial room or default
+    // Load initial room or default
   const cfg = await getSettings()
   const selectedCardIdx = cfg?.selectedCharacterCardIndex
         let roomId = 'default'
@@ -146,10 +160,12 @@ export default function Chat(){
           if (activeRoom) roomId = activeRoom
         }
         setActiveRoomId(roomId)
+        activeRoomIdRef.current = roomId
         const history = await getConversationHistory(roomId)
         if (history && Array.isArray(history)) {
           setMessages(history)
         }
+        try { const an = await getRoomAuthorNotes(roomId); setRoomAuthorNotes(an || '') } catch {}
         const s = await getSettings();
         
         // Load persona TTS settings (사용자 음성)
@@ -234,6 +250,10 @@ export default function Chat(){
         setAssetMap(amap);
       } catch (e) {
         console.error('[Chat] Failed to load conversation history', e);
+      }
+      return () => {
+        try { if (onRoomChangeFn) window.removeEventListener('chatRoomChanged', onRoomChangeFn as any) } catch {}
+        try { if (onAuthorNotesChangedFn) window.removeEventListener('authorNotesChanged', onAuthorNotesChangedFn as any) } catch {}
       }
     })();
   }, []);
@@ -783,9 +803,12 @@ export default function Chat(){
         { name: '사용자 입력', type: 'pure', prompt: '{{user_input}}', role: 'user' }
       ];
 
-      // Build messages from blocks WITHOUT adding user message at end
+  // Build messages from blocks WITHOUT adding user message at end
       // (user input is already inserted via {{user_input}} placeholder)
-      let builtMessages = await buildPromptMessages(promptBlocks, messages);
+  // Load the freshest author notes for the active room just-in-time
+  let latestAuthorNotes = roomAuthorNotes;
+  try { const fresh = await getRoomAuthorNotes(activeRoomIdRef.current || activeRoomId || 'default'); if (typeof fresh === 'string') latestAuthorNotes = fresh; } catch {}
+  let builtMessages = await buildPromptMessages(promptBlocks, messages, { authorNotes: latestAuthorNotes });
       
       // Apply input regex transforms to user input BEFORE sending
       const transformedInput = applyRegexToInput(text.trim());
