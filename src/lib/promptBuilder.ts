@@ -85,16 +85,40 @@ export async function buildPromptMessages(blocks: PromptBlock[], conversationHis
       const finalText = replaceVariables(content || '', variables);
       messages.push({ role: b.role, content: finalText });
     } else if (b.type === 'conversation') {
-      // If startIndex/endIndex provided, use them as slice bounds (inclusive start, inclusive end)
+      // If startIndex/endIndex provided, use them with reverse indexing semantics:
+      // - startIndex: 0 means the most recent (last) message, 1 means second most recent, etc.
+      // - endIndex: if 0, special option to include up to the very end (latest message).
+      //   Otherwise, same reverse indexing as startIndex.
+      // Indices are inclusive. If either is missing, defaults apply (start from oldest or end at newest).
       if (typeof b.startIndex === 'number' || typeof b.endIndex === 'number'){
-        const start = Math.max(0, (typeof b.startIndex === 'number') ? b.startIndex : 0);
-        const end = (typeof b.endIndex === 'number') ? b.endIndex : (conversationHistory.length - 1);
-        // slice end is exclusive, so use end+1
-        const slice = conversationHistory.slice(start, Math.min(conversationHistory.length, end + 1));
-        for (let i = 0; i < slice.length; i++){
-          const item = slice[i];
-          const r = item.role === 'assistant' ? 'assistant' : 'user';
-          messages.push({ role: r, content: item.text });
+        const len = conversationHistory.length;
+        if (len > 0) {
+          // Map reverse offset (0=last) to absolute index (0..len-1)
+          const fromTail = (offset: number) => Math.max(0, Math.min(len - 1, (len - 1 - offset)));
+
+          // Compute absolute start/end with defaults
+          const absStart = (typeof b.startIndex === 'number') ? fromTail(Math.max(0, b.startIndex)) : 0;
+          let absEnd: number;
+          if (typeof b.endIndex === 'number') {
+            if (b.endIndex === 0) {
+              // Special option: include all the way to the newest message
+              absEnd = len - 1;
+            } else {
+              absEnd = fromTail(Math.max(0, b.endIndex));
+            }
+          } else {
+            absEnd = len - 1;
+          }
+
+          // Normalize bounds
+          const start = Math.max(0, Math.min(absStart, len - 1));
+          const end = Math.max(start, Math.min(absEnd, len - 1));
+          const slice = conversationHistory.slice(start, end + 1);
+          for (let i = 0; i < slice.length; i++){
+            const item = slice[i];
+            const r = item.role === 'assistant' ? 'assistant' : 'user';
+            messages.push({ role: r, content: item.text });
+          }
         }
       } else {
         const count = (typeof b.count === 'number' && b.count > 0) ? b.count : 10;
