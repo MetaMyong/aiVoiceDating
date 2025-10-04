@@ -543,92 +543,104 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   }
 
   const saveAll = () => {
-    // Commit all drafts from refs before saving
+    // 1) 최종 카드 텍스트 값은 draft refs에서 직접 읽어 최신값 보장
     const finalCardName = cardDraftsRef.current.name
     const finalCardDesc = cardDraftsRef.current.desc
     const finalGlobalOverride = cardDraftsRef.current.globalOverride
-    
-    // Update states with draft values
+
+    // UI 상태도 업데이트(시각적 동기화용)
     setCardName(finalCardName)
     setCardDesc(finalCardDesc)
     setGlobalOverride(finalGlobalOverride)
-    
-    // Commit all room drafts
+
+    // 2) 채팅방 이름 초안 커밋(별도 저장 영역이라 즉시 반영 필요)
     rooms.forEach((room) => {
       const roomId = room.id
       const draft = roomDraftsRef.current[roomId]
-      if (draft) {
-        commitRoomDraft(roomId)
-      }
+      if (draft) commitRoomDraft(roomId)
     })
-    
-    // Commit all lore drafts
-    loreEntries.forEach((entry, idx) => {
+
+    // 3) 로어/스크립트는 setState 타이밍을 기다리지 않고 draft refs와 현재 state를 병합해 최종 데이터 구성
+    const finalLoreEntries = loreEntries.map((entry, idx) => {
       const key = String(entry?._lid || idx)
       const draft = loreDraftsRef.current[key]
-      if (draft) {
-        commitLoreDraft(key, idx)
+      const name = draft?.name ?? entry.name ?? ''
+      const orderStr = draft?.order ?? (entry as any)._io
+      const insertion_order = Number(orderStr ?? entry.insertion_order ?? 0) || 0
+      const keysVal = draft?.keys != null
+        ? draft.keys.split(',').map(s => s.trim()).filter(Boolean)
+        : entry.keys
+      const content = draft?.content ?? entry.content ?? ''
+      const { _lid, _io, ...rest } = entry as any
+      return {
+        ...rest,
+        name,
+        keys: keysVal,
+        content,
+        insertion_order
       }
     })
-    
-    // Commit all script drafts
-    scripts.forEach((script, idx) => {
-      const key = String(script?.id || idx)
+
+    const finalScripts = scripts.map((sc, idx) => {
+      const key = String(sc?.id || idx)
       const draft = scriptDraftsRef.current[key]
-      if (draft) {
-        commitScriptDraft(key, idx)
+      return {
+        id: sc.id,
+        name: draft?.name ?? sc.name ?? '',
+        type: sc.type,
+        in: draft?.in ?? sc.in ?? '',
+        out: draft?.out ?? sc.out ?? '',
+        flags: draft?.flags ?? sc.flags ?? 'g',
+        enabled: sc.enabled !== false
       }
     })
-    
-    // Use setTimeout to ensure state updates are processed
-    setTimeout(() => {
-      // Build characterTTS config based on provider
-      let characterTTSConfig: any = null
-      if (characterTTSProvider === 'none') {
-        characterTTSConfig = null
-      } else if (characterTTSProvider === 'gemini') {
-        characterTTSConfig = {
-          provider: 'gemini',
-          model: characterTTSModel || 'gemini-2.5-flash-preview-tts',
-          voice: characterTTSVoice || 'Zephyr'
-        }
-      } else if (characterTTSProvider === 'fishaudio') {
-        characterTTSConfig = {
-          provider: 'fishaudio',
-          model: characterTTSModel
-        }
+
+    // 4) 캐릭터 TTS 구성
+    let characterTTSConfig: any = null
+    if (characterTTSProvider === 'gemini') {
+      characterTTSConfig = {
+        provider: 'gemini',
+        model: characterTTSModel || 'gemini-2.5-flash-preview-tts',
+        voice: characterTTSVoice || 'Zephyr'
       }
-      
-      const next = {
-        ...persona,
-        name: finalCardName,
-        description: finalCardDesc,
-        characterData: {
-          ...v3,
-          data: {
-            ...v3.data,
-            name: finalCardName,
-            description: finalCardDesc,
-            post_history_instructions: finalGlobalOverride,
-            character_book: {
-              ...(v3.data.character_book||{}),
-              entries: loreEntries.map(({ _lid, _io, ...rest }: any) => ({ ...rest, insertion_order: Number(_io ?? rest.insertion_order ?? 0) || 0 }))
-            },
-            extensions: {
-              ...(v3.data.extensions||{}),
-              characterTTS: characterTTSConfig,
-              risuai: {
-                ...((v3.data.extensions||{}).risuai||{}),
-                customScripts: scripts.map((s:any) => ({ id: s.id, name: s.name, type: s.type, in: s.in, out: s.out, flags: s.flags, enabled: s.enabled }))
-              }
+    } else if (characterTTSProvider === 'fishaudio') {
+      characterTTSConfig = { provider: 'fishaudio', model: characterTTSModel }
+    } else {
+      characterTTSConfig = null
+    }
+
+    // 5) 최종 페르소나 객체 구성 후 콜백
+    const next = {
+      ...persona,
+      name: finalCardName,
+      description: finalCardDesc,
+      characterData: {
+        ...v3,
+        data: {
+          ...v3.data,
+          name: finalCardName,
+          description: finalCardDesc,
+          post_history_instructions: finalGlobalOverride,
+          character_book: {
+            ...(v3.data.character_book || {}),
+            entries: finalLoreEntries
+          },
+          extensions: {
+            ...(v3.data.extensions || {}),
+            characterTTS: characterTTSConfig,
+            risuai: {
+              ...((v3.data.extensions || {}).risuai || {}),
+              customScripts: finalScripts
             }
           }
         }
       }
-      console.log('[CharacterSidePanel] Saving characterTTS:', characterTTSConfig)
-      console.log('[CharacterSidePanel] Full persona data:', next)
-      onChange(next)
-    }, 0)
+    }
+
+    console.log('[CharacterSidePanel] Saving characterTTS:', characterTTSConfig)
+    console.log('[CharacterSidePanel] Final lore entries count:', finalLoreEntries.length)
+    console.log('[CharacterSidePanel] Final scripts count:', finalScripts.length)
+    onChange(next)
   }
 
   // UI helpers
