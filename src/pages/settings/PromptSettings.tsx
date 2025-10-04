@@ -51,10 +51,22 @@ export default function PromptSettings(props: any){
   const cfgRef = React.useRef(cfg)
   React.useEffect(() => { cfgRef.current = cfg }, [cfg])
 
-  // Expose commitEdits via ref for parent to call before saving
+  // Expose commit function via ref for parent to call before saving
   React.useEffect(() => {
     if (promptCommitRef) {
-      promptCommitRef.current = commitEdits
+      promptCommitRef.current = () => {
+        // Commit all prompt drafts from ref
+        setLocalBlocks((prev) => {
+          const updated = prev.map(block => {
+            const draft = promptDraftsRef.current[block.id]
+            if (draft !== undefined && draft !== block.prompt) {
+              return { ...block, prompt: draft }
+            }
+            return block
+          })
+          return updated
+        })
+      }
     }
   }, [promptCommitRef])
 
@@ -354,14 +366,6 @@ export default function PromptSettings(props: any){
                           onChange={(e) => {
                             // Update ref only, no state change
                             promptDraftsRef.current[b.id] = e.target.value
-                          }}
-                          onBlur={() => {
-                            // Commit to state on blur
-                            const draft = promptDraftsRef.current[b.id]
-                            if (draft !== undefined && draft !== b.prompt) {
-                              updateBlockField(i, { prompt: draft })
-                              commitEdits()
-                            }
                           }}
                           draggable={false}
                         />

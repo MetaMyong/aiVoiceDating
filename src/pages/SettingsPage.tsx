@@ -230,6 +230,7 @@ export default function SettingsPage(){
 
       {/* 저장 버튼 */}
       <button 
+        onMouseDown={(e) => e.preventDefault()}
         onClick={()=>saveCfg()} 
         className="fixed left-1/2 transform -translate-x-1/2 bottom-6 px-6 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white rounded-lg shadow-lg hover:shadow-xl transition-all font-medium z-50"
       >

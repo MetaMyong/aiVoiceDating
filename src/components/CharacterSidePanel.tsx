@@ -539,7 +539,13 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
         <div className="flex items-center justify-between mb-6">
           <div className="text-slate-400 text-sm">캐릭터 편집</div>
           <div className="flex gap-2">
-            <button onClick={saveAll} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">저장</button>
+            <button 
+              onMouseDown={(e) => e.preventDefault()} 
+              onClick={saveAll} 
+              className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
+            >
+              저장
+            </button>
             <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-700/70 hover:bg-slate-600/70 text-slate-200">닫기</button>
           </div>
         </div>
