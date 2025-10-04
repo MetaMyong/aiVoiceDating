@@ -86,7 +86,7 @@ async function synthChunkSync(textChunk, index = 0) {
 				temperature: 0.7,
 				top_p: 0.7,
 				prosody: {},
-				chunk_length: 100,
+				chunk_length: 280,
 				normalize: false,
 				format: 'mp3',
 				mp3_bitrate: 128,

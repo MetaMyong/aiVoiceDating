@@ -105,6 +105,10 @@ export default function SettingsPage(){
   setPromptBlocks(effectiveBlocks);
   // Read latest settings from IndexedDB and merge with current cfg state
   const latest = await idbGetSettings();
+  
+  console.log('[SettingsPage] saveCfg - cfg.personas:', cfg?.personas);
+  console.log('[SettingsPage] saveCfg - cfg.personas[1].characterData.extensions.characterTTS:', cfg?.personas?.[1]?.characterData?.data?.extensions?.characterTTS);
+  
   // cfg에는 페르소나 정보 등 최신 상태가 들어있으므로 cfg를 우선으로 병합
   await idbSetSettings({ ...(latest || {}), ...cfg, promptBlocks: effectiveBlocks });
       await idbSetFishModels(fishModels || []);
@@ -196,7 +200,6 @@ export default function SettingsPage(){
                 <>
                   <button onClick={()=>setTab('llm')} className={`px-4 py-2 rounded-lg transition-all ${tab==='llm'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>LLM</button>
                   <button onClick={()=>setTab('stt')} className={`px-4 py-2 rounded-lg transition-all ${tab==='stt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>STT</button>
-                  <button onClick={()=>setTab('tts')} className={`px-4 py-2 rounded-lg transition-all ${tab==='tts'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>TTS</button>
                   <button onClick={()=>setTab('api')} className={`px-4 py-2 rounded-lg transition-all ${tab==='api'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>API</button>
                 </>
               ) : leftSection === 'prompt' ? (

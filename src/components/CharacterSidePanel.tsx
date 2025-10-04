@@ -27,6 +27,10 @@ type ScriptDraft = {
   out: string
 }
 
+type RoomDraft = {
+  name: string
+}
+
 // Separate components to prevent re-render on parent state change
 const LoreInput = React.memo(({ 
   id, 
@@ -156,6 +160,9 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   const [cardName, setCardName] = useState<string>(v3.data.name || '')
   const [cardDesc, setCardDesc] = useState<string>(v3.data.description || '')
   const [globalOverride, setGlobalOverride] = useState<string>(v3.data.post_history_instructions || '')
+  const [characterTTSProvider, setCharacterTTSProvider] = useState<string>(v3.data.extensions?.characterTTS?.provider || 'none')
+  const [characterTTSModel, setCharacterTTSModel] = useState<string>(v3.data.extensions?.characterTTS?.model || '')
+  const [characterTTSVoice, setCharacterTTSVoice] = useState<string>(v3.data.extensions?.characterTTS?.voice || 'Zephyr')
   
   // Use ref for drafts to avoid re-renders
   const cardDraftsRef = useRef({
@@ -196,6 +203,10 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   })
   const [openLoreIdx, setOpenLoreIdx] = useState<Record<string, boolean>>({})
   const [openScriptIdx, setOpenScriptIdx] = useState<Record<string, boolean>>({})
+  
+  // Room drafts for each room by ID
+  const roomDraftsRef = useRef<Record<string, RoomDraft>>({})
+  const roomDraftHandlersRef = useRef<Record<string, { name: (val: string) => void }>>({})
 
   const shouldHideLoreEntry = useCallback((entry: any) => {
     if (!entry) return false
@@ -290,6 +301,18 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
       return clone
     })
   }, [])
+
+  const commitRoomDraft = useCallback((roomId: string) => {
+    const draft = roomDraftsRef.current[roomId]
+    if (!draft) return
+    
+    setRooms(prev => {
+      const updated = prev.map(r => r.id === roomId ? { ...r, name: draft.name } : r)
+      // Save to IndexedDB
+      setChatRooms(personaIndex, updated).catch(err => console.error('Failed to save room name:', err))
+      return updated
+    })
+  }, [personaIndex])
 
   const commitScriptDraft = useCallback((key: string, index: number) => {
     const draft = scriptDraftsRef.current[key]
@@ -399,6 +422,25 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
       setActiveRoomIdLocal(active || '')
     })()
   }, [personaIndex])
+  
+  // Initialize room draft handlers when rooms change
+  useEffect(() => {
+    rooms.forEach(room => {
+      const roomId = room.id
+      if (!roomDraftsRef.current[roomId]) {
+        roomDraftsRef.current[roomId] = { name: room.name }
+      }
+      if (!roomDraftHandlersRef.current[roomId]) {
+        roomDraftHandlersRef.current[roomId] = {
+          name: (val: string) => {
+            roomDraftsRef.current[roomId] = { ...roomDraftsRef.current[roomId], name: val }
+          }
+        }
+      }
+    })
+  }, [rooms])
+  
+  const roomDraftHandlers = roomDraftHandlersRef.current
 
   // Measure sidebar width to align panel flush to its left edge
   useLayoutEffect(() => {
@@ -466,6 +508,15 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     setCardDesc(finalCardDesc)
     setGlobalOverride(finalGlobalOverride)
     
+    // Commit all room drafts
+    rooms.forEach((room) => {
+      const roomId = room.id
+      const draft = roomDraftsRef.current[roomId]
+      if (draft) {
+        commitRoomDraft(roomId)
+      }
+    })
+    
     // Commit all lore drafts
     loreEntries.forEach((entry, idx) => {
       const key = String(entry?._lid || idx)
@@ -486,6 +537,23 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     
     // Use setTimeout to ensure state updates are processed
     setTimeout(() => {
+      // Build characterTTS config based on provider
+      let characterTTSConfig: any = null
+      if (characterTTSProvider === 'none') {
+        characterTTSConfig = null
+      } else if (characterTTSProvider === 'gemini') {
+        characterTTSConfig = {
+          provider: 'gemini',
+          model: characterTTSModel || 'gemini-2.5-flash-preview-tts',
+          voice: characterTTSVoice || 'Zephyr'
+        }
+      } else if (characterTTSProvider === 'fishaudio') {
+        characterTTSConfig = {
+          provider: 'fishaudio',
+          model: characterTTSModel
+        }
+      }
+      
       const next = {
         ...persona,
         name: finalCardName,
@@ -503,6 +571,7 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
             },
             extensions: {
               ...(v3.data.extensions||{}),
+              characterTTS: characterTTSConfig,
               risuai: {
                 ...((v3.data.extensions||{}).risuai||{}),
                 customScripts: scripts.map((s:any) => ({ id: s.id, name: s.name, type: s.type, in: s.in, out: s.out, flags: s.flags, enabled: s.enabled }))
@@ -511,6 +580,8 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
           }
         }
       }
+      console.log('[CharacterSidePanel] Saving characterTTS:', characterTTSConfig)
+      console.log('[CharacterSidePanel] Full persona data:', next)
       onChange(next)
     }, 0)
   }
@@ -557,14 +628,23 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
             <div className="text-sm font-bold text-slate-300 text-center">채팅방</div>
             <div className="text-xs font-bold text-slate-300 flex items-center gap-2"><IconCog className="w-4 h-4 text-teal-400" /> 채팅방 정보</div>
             <div className="space-y-2">
-              {rooms.map(r=> (
-                <div key={r.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${activeRoomId===r.id? 'border-teal-500/60 bg-slate-800/60':'border-slate-700/50 bg-slate-900/40'}`}>
-                  <label htmlFor={`room-name-${r.id}`} className="sr-only">채팅방 이름</label>
-                  <input id={`room-name-${r.id}`} name={`room-name-${r.id}`} aria-label="채팅방 이름" className="flex-1 bg-transparent outline-none text-slate-100" value={r.name} onChange={e=>renameRoom(r.id, e.target.value)} />
-                  <button onClick={()=>emitRoomChange(r.id)} className={`px-2 py-1 text-xs rounded ${activeRoomId===r.id? 'bg-teal-600 text-white':'bg-slate-700/70 text-slate-200 hover:bg-slate-600/70'}`}>활성화</button>
-                  <button onClick={()=>removeRoom(r.id)} className="p-1 text-slate-300 hover:text-red-400"><IconTrash className="w-4 h-4"/></button>
-                </div>
-              ))}
+              {rooms.map(r=> {
+                const draft = roomDraftsRef.current[r.id] || { name: r.name }
+                return (
+                  <div key={r.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${activeRoomId===r.id? 'border-teal-500/60 bg-slate-800/60':'border-slate-700/50 bg-slate-900/40'}`}>
+                    <label htmlFor={`room-name-${r.id}`} className="sr-only">채팅방 이름</label>
+                    <LoreInput
+                      id={`room-name-${r.id}`}
+                      className="flex-1 bg-transparent outline-none text-slate-100"
+                      value={draft.name}
+                      onChange={roomDraftHandlers[r.id]?.name}
+                      onBlur={() => commitRoomDraft(r.id)}
+                    />
+                    <button onClick={()=>emitRoomChange(r.id)} className={`px-2 py-1 text-xs rounded ${activeRoomId===r.id? 'bg-teal-600 text-white':'bg-slate-700/70 text-slate-200 hover:bg-slate-600/70'}`}>활성화</button>
+                    <button onClick={()=>removeRoom(r.id)} className="p-1 text-slate-300 hover:text-red-400"><IconTrash className="w-4 h-4"/></button>
+                  </div>
+                )
+              })}
               <button onClick={addRoom} className="w-full py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/70 text-slate-200">+ 새 채팅</button>
             </div>
           </div>
@@ -598,7 +678,7 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
               />
             </div>
             <div>
-              <label htmlFor="card-global-override" className="block text-xs text-slate-400 mb-1">글로벌 노트 덮어쓰기 (post_history_instructions)</label>
+              <label htmlFor="card-global-override" className="block text-xs text-slate-400 mb-1">글로벌 노트 덮어쓰기</label>
               <LoreInput
                 id="card-global-override"
                 className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]"
@@ -607,6 +687,106 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                 onBlur={() => commitCardDraft('globalOverride')}
                 isTextarea
               />
+            </div>
+            
+            {/* 캐릭터 TTS 설정 */}
+            <div className="space-y-2 bg-slate-800/30 p-3 rounded-lg border border-slate-700/50">
+              <div className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                <span className="text-purple-400">🔊</span> 캐릭터 TTS
+              </div>
+              <div>
+                <label htmlFor="char-tts-provider" className="block text-xs text-slate-400 mb-1">TTS 제공자</label>
+                <select
+                  id="char-tts-provider"
+                  value={characterTTSProvider}
+                  onChange={(e) => {
+                    const newProvider = e.target.value;
+                    setCharacterTTSProvider(newProvider);
+                    // Provider 변경 시 model 초기화
+                    if (newProvider === 'gemini') {
+                      setCharacterTTSModel('gemini-2.5-flash-preview-tts');
+                    } else if (newProvider === 'fishaudio') {
+                      setCharacterTTSModel('');
+                    } else {
+                      setCharacterTTSModel('');
+                    }
+                  }}
+                  className="w-full px-2 py-1.5 bg-slate-800/60 border border-slate-700/50 rounded text-slate-100 text-xs"
+                >
+                  <option value="none">사용안함</option>
+                  <option value="gemini">Gemini (Google)</option>
+                  <option value="fishaudio">FishAudio</option>
+                </select>
+              </div>
+              {characterTTSProvider === 'gemini' && (
+                <>
+                  <div>
+                    <label htmlFor="char-tts-model" className="block text-xs text-slate-400 mb-1">TTS 모델</label>
+                    <select
+                      id="char-tts-model"
+                      value={characterTTSModel || 'gemini-2.5-flash-preview-tts'}
+                      onChange={(e) => setCharacterTTSModel(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-800/60 border border-slate-700/50 rounded text-slate-100 text-xs"
+                    >
+                      <option value="gemini-2.5-flash-preview-tts">gemini-2.5-flash-preview-tts</option>
+                      <option value="gemini-2.5-pro-preview-tts">gemini-2.5-pro-preview-tts</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="char-tts-voice" className="block text-xs text-slate-400 mb-1">음성</label>
+                    <select
+                      id="char-tts-voice"
+                      value={characterTTSVoice}
+                      onChange={(e) => setCharacterTTSVoice(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-800/60 border border-slate-700/50 rounded text-slate-100 text-xs"
+                    >
+                      <option value="Achernar">Achernar (Soft · 여성)</option>
+                      <option value="Achird">Achird (Friendly · 남성)</option>
+                      <option value="Algenib">Algenib (Gravelly · 남성)</option>
+                      <option value="Algieba">Algieba (Smooth · 남성)</option>
+                      <option value="Alnilam">Alnilam (Firm · 남성)</option>
+                      <option value="Aoede">Aoede (Breezy · 여성)</option>
+                      <option value="Autonoe">Autonoe (Bright · 여성)</option>
+                      <option value="Callirrhoe">Callirrhoe (Easy-going · 여성)</option>
+                      <option value="Charon">Charon (Informative · 남성)</option>
+                      <option value="Despina">Despina (Smooth · 여성)</option>
+                      <option value="Enceladus">Enceladus (Breathy · 남성)</option>
+                      <option value="Erinome">Erinome (Clear · 여성)</option>
+                      <option value="Fenrir">Fenrir (Excitable · 남성)</option>
+                      <option value="Gacrux">Gacrux (Mature · 여성)</option>
+                      <option value="Iapetus">Iapetus (Clear · 남성)</option>
+                      <option value="Kore">Kore (Firm · 여성)</option>
+                      <option value="Laomedeia">Laomedeia (Upbeat · 여성)</option>
+                      <option value="Leda">Leda (Youthful · 여성)</option>
+                      <option value="Orus">Orus (Firm · 남성)</option>
+                      <option value="Pulcherrima">Pulcherrima (Forward · 여성)</option>
+                      <option value="Puck">Puck (Upbeat · 남성)</option>
+                      <option value="Rasalgethi">Rasalgethi (Informative · 남성)</option>
+                      <option value="Sadachbia">Sadachbia (Lively · 여성)</option>
+                      <option value="Sadaltager">Sadaltager (Knowledgeable · 남성)</option>
+                      <option value="Schedar">Schedar (Even · 남성)</option>
+                      <option value="Sulafat">Sulafat (Warm · 여성)</option>
+                      <option value="Umbriel">Umbriel (Easy-going · 남성)</option>
+                      <option value="Vindemiatrix">Vindemiatrix (Gentle · 여성)</option>
+                      <option value="Zephyr">Zephyr (Bright · 여성)</option>
+                      <option value="Zubenelgenubi">Zubenelgenubi (Casual · 남성)</option>
+                    </select>
+                  </div>
+                </>
+              )}
+              {characterTTSProvider === 'fishaudio' && (
+                <div>
+                  <label htmlFor="char-tts-model" className="block text-xs text-slate-400 mb-1">FishAudio 모델 ID</label>
+                  <input
+                    id="char-tts-model"
+                    type="text"
+                    value={characterTTSModel}
+                    onChange={(e) => setCharacterTTSModel(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-slate-800/60 border border-slate-700/50 rounded text-slate-100 text-xs"
+                    placeholder="FishAudio 모델 ID 입력"
+                  />
+                </div>
+              )}
             </div>
           </div>
 

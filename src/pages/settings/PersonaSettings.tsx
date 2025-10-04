@@ -9,10 +9,47 @@ interface Persona {
   description: string
   avatar: string // base64 or URL
   characterData?: any // 전체 character card 데이터
+  ttsProvider?: string // 'none', 'gemini', 'fishaudio'
+  ttsModel?: string // TTS 모델 ID
+  ttsVoice?: string // Gemini TTS voice name (Gemini only)
 }
 
 export default function PersonaSettings(props: any) {
   const { cfg, setCfg } = props
+  
+  // Gemini voice options
+  const geminiVoices: { value: string; label: string; gender?: string; desc?: string }[] = [
+    { value: 'Achernar', label: 'Achernar', gender: '여성', desc: 'Soft · 여성' },
+    { value: 'Achird', label: 'Achird', gender: '남성', desc: 'Friendly · 남성' },
+    { value: 'Algenib', label: 'Algenib', gender: '남성', desc: 'Gravelly · 남성' },
+    { value: 'Algieba', label: 'Algieba', gender: '남성', desc: 'Smooth · 남성' },
+    { value: 'Alnilam', label: 'Alnilam', gender: '남성', desc: 'Firm · 남성' },
+    { value: 'Aoede', label: 'Aoede', gender: '여성', desc: 'Breezy · 여성' },
+    { value: 'Autonoe', label: 'Autonoe', gender: '여성', desc: 'Bright · 여성' },
+    { value: 'Callirrhoe', label: 'Callirrhoe', gender: '여성', desc: 'Easy-going · 여성' },
+    { value: 'Charon', label: 'Charon', gender: '남성', desc: 'Informative · 남성' },
+    { value: 'Despina', label: 'Despina', gender: '여성', desc: 'Smooth · 여성' },
+    { value: 'Enceladus', label: 'Enceladus', gender: '남성', desc: 'Breathy · 남성' },
+    { value: 'Erinome', label: 'Erinome', gender: '여성', desc: 'Clear · 여성' },
+    { value: 'Fenrir', label: 'Fenrir', gender: '남성', desc: 'Excitable · 남성' },
+    { value: 'Gacrux', label: 'Gacrux', gender: '여성', desc: 'Mature · 여성' },
+    { value: 'Iapetus', label: 'Iapetus', gender: '남성', desc: 'Clear · 남성' },
+    { value: 'Kore', label: 'Kore', gender: '여성', desc: 'Firm · 여성' },
+    { value: 'Laomedeia', label: 'Laomedeia', gender: '여성', desc: 'Upbeat · 여성' },
+    { value: 'Leda', label: 'Leda', gender: '여성', desc: 'Youthful · 여성' },
+    { value: 'Orus', label: 'Orus', gender: '남성', desc: 'Firm · 남성' },
+    { value: 'Pulcherrima', label: 'Pulcherrima', gender: '여성', desc: 'Forward · 여성' },
+    { value: 'Puck', label: 'Puck', gender: '남성', desc: 'Upbeat · 남성' },
+    { value: 'Rasalgethi', label: 'Rasalgethi', gender: '남성', desc: 'Informative · 남성' },
+    { value: 'Sadachbia', label: 'Sadachbia', gender: '여성', desc: 'Lively · 여성' },
+    { value: 'Sadaltager', label: 'Sadaltager', gender: '남성', desc: 'Knowledgeable · 남성' },
+    { value: 'Schedar', label: 'Schedar', gender: '남성', desc: 'Even · 남성' },
+    { value: 'Sulafat', label: 'Sulafat', gender: '여성', desc: 'Warm · 여성' },
+    { value: 'Umbriel', label: 'Umbriel', gender: '남성', desc: 'Easy-going · 남성' },
+    { value: 'Vindemiatrix', label: 'Vindemiatrix', gender: '여성', desc: 'Gentle · 여성' },
+    { value: 'Zephyr', label: 'Zephyr', gender: '여성', desc: 'Bright · 여성' },
+    { value: 'Zubenelgenubi', label: 'Zubenelgenubi', gender: '남성', desc: 'Casual · 남성' }
+  ]
   const [personas, setPersonas] = useState<Persona[]>(cfg?.personas || [])
   const [selectedIndex, setSelectedIndex] = useState<number>(cfg?.selectedPersonaIndex ?? 0)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -357,16 +394,44 @@ export default function PersonaSettings(props: any) {
     setPersonas(updated)
   }
 
+  function updatePersonaTTSProvider(provider: string) {
+    if (!selectedPersona) return
+    const updated = [...personas]
+    updated[selectedIndex] = { ...selectedPersona, ttsProvider: provider }
+    setPersonas(updated)
+  }
+
+  function updatePersonaTTSModel(model: string) {
+    if (!selectedPersona) return
+    const updated = [...personas]
+    updated[selectedIndex] = { ...selectedPersona, ttsModel: model }
+    setPersonas(updated)
+  }
+
+  function updatePersonaTTSVoice(voice: string) {
+    if (!selectedPersona) return
+    const updated = [...personas]
+    updated[selectedIndex] = { ...selectedPersona, ttsVoice: voice }
+    setPersonas(updated)
+  }
+
   function applyPersonaFromPanel(updatedPersona: Persona) {
     const updated = [...personas]
     updated[selectedIndex] = { ...updatedPersona }
+    console.log('[PersonaSettings] applyPersonaFromPanel called with:', updatedPersona)
+    console.log('[PersonaSettings] characterTTS in characterData:', updatedPersona.characterData?.data?.extensions?.characterTTS)
     setPersonas(updated)
+    // Update parent cfg state immediately
+    setCfg((prev: any) => ({ ...prev, personas: updated, selectedPersonaIndex: selectedIndex }))
     // Also persist panel changes immediately
     ;(async ()=>{
       try{
         const latest = await idbGetSettings()
         await idbSetSettings({ ...(latest||{}), personas: updated, selectedPersonaIndex: selectedIndex })
-      }catch(e){}
+        console.log('[PersonaSettings] Saved to IndexedDB:', { personas: updated })
+      }catch(e){
+        console.error('[PersonaSettings] Failed to save to IndexedDB:', e)
+      }
     })()
   }
 
@@ -469,7 +534,7 @@ export default function PersonaSettings(props: any) {
           <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/5 via-transparent to-teal-500/5 pointer-events-none" />
           
           <div className="relative flex gap-8">
-            <div className="flex-shrink-0">
+            <div className="flex-shrink-0 space-y-5">
               <div
                 onClick={handleChangeAvatar}
                 className="group relative w-72 h-72 rounded-2xl overflow-hidden border-4 border-slate-700/50 hover:border-teal-500 cursor-pointer transition-all duration-300 bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center shadow-2xl hover:shadow-teal-500/30"
@@ -492,9 +557,73 @@ export default function PersonaSettings(props: any) {
                   <div className="text-slate-600 text-9xl group-hover:text-slate-500 group-hover:scale-110 transition-all duration-300">?</div>
                 )}
               </div>
+              
+              {/* 페르소나 TTS 설정 - 좌측으로 이동 */}
+              <div className="space-y-3 bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
+                <label className="flex text-sm font-bold text-slate-300 items-center gap-2">
+                  <span className="text-purple-400">🔊</span> 페르소나 TTS
+                </label>
+                
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-2">TTS 제공자</label>
+                  <select
+                    value={selectedPersona.ttsProvider || 'none'}
+                    onChange={(e) => updatePersonaTTSProvider(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800/60 border-2 border-slate-700/50 rounded-lg text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all duration-200"
+                  >
+                    <option value="none">사용안함</option>
+                    <option value="gemini">Gemini (Google)</option>
+                    <option value="fishaudio">FishAudio</option>
+                  </select>
+                </div>
+
+                {selectedPersona.ttsProvider === 'gemini' && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-2">TTS 모델</label>
+                      <select
+                        value={selectedPersona.ttsModel || 'gemini-2.5-flash-preview-tts'}
+                        onChange={(e) => updatePersonaTTSModel(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-800/60 border-2 border-slate-700/50 rounded-lg text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all duration-200"
+                      >
+                        <option value="gemini-2.5-flash-preview-tts">gemini-2.5-flash-preview-tts</option>
+                        <option value="gemini-2.5-pro-preview-tts">gemini-2.5-pro-preview-tts</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-2">음성</label>
+                      <select
+                        value={selectedPersona.ttsVoice || 'Zephyr'}
+                        onChange={(e) => updatePersonaTTSVoice(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-800/60 border-2 border-slate-700/50 rounded-lg text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all duration-200"
+                      >
+                        {geminiVoices.map((v) => (
+                          <option key={v.value} value={v.value}>
+                            {v.label} {v.desc ? `(${v.desc})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
+
+                {selectedPersona.ttsProvider === 'fishaudio' && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-2">FishAudio 모델 ID</label>
+                    <input
+                      type="text"
+                      value={selectedPersona.ttsModel || ''}
+                      onChange={(e) => updatePersonaTTSModel(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-800/60 border-2 border-slate-700/50 rounded-lg text-slate-100 text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all duration-200"
+                      placeholder="FishAudio 모델 ID 입력"
+                    />
+                  </div>
+                )}
+              </div>
+              
               <button
                 onClick={handleDeletePersona}
-                className="mt-5 w-full px-5 py-3.5 bg-gradient-to-r from-red-600/90 to-red-500/90 hover:from-red-500 hover:to-red-400 text-slate-100 font-bold rounded-xl shadow-lg shadow-red-500/30 hover:shadow-red-400/50 transition-all duration-300 flex items-center justify-center gap-2"
+                className="w-full px-5 py-3.5 bg-gradient-to-r from-red-600/90 to-red-500/90 hover:from-red-500 hover:to-red-400 text-slate-100 font-bold rounded-xl shadow-lg shadow-red-500/30 hover:shadow-red-400/50 transition-all duration-300 flex items-center justify-center gap-2"
               >
                 <IconTrash className="w-5 h-5" /> 삭제
               </button>
@@ -525,18 +654,6 @@ export default function PersonaSettings(props: any) {
                   placeholder="페르소나에 대한 설명을 입력하세요..."
                 />
               </div>
-
-              {selectedPersona.characterData && (
-                <details className="group/details">
-                  <summary className="cursor-pointer text-sm text-slate-400 hover:text-teal-400 transition-colors select-none font-semibold flex items-center gap-2">
-                    <span className="transform group-open/details:rotate-90 transition-transform">▶</span>
-                    📋 캐릭터 카드 원본 데이터
-                  </summary>
-                  <pre className="mt-4 p-5 bg-slate-950/60 border-2 border-slate-700/50 rounded-xl overflow-auto max-h-72 text-xs text-slate-300 font-mono shadow-inner">
-                    {JSON.stringify(selectedPersona.characterData, null, 2)}
-                  </pre>
-                </details>
-              )}
             </div>
           </div>
         </section>

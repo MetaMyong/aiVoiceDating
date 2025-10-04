@@ -109,6 +109,16 @@ export default function Chat(){
   const ttsSeqRef = useRef(0); // sequence to assign to next item
   const ttsNextSeqToPlayRef = useRef(0); // next sequence expected to play
   const ttsPlayingRef = useRef(false);
+  
+  // Persona TTS state
+  const [personaTTS, setPersonaTTS] = useState<{provider: string, model: string, voice?: string} | null>(null);
+  const personaTTSPlayingRef = useRef(false);
+  const personaTTSScheduledRef = useRef(false); // 페르소나 TTS가 예정되어 있는지
+  
+  // Character TTS state (캐릭터별 TTS)
+  const [characterTTS, setCharacterTTS] = useState<{provider: string, model: string, voice?: string} | null>(null);
+  
+  const pendingLLMResponseRef = useRef<{messages: Message[], index: number} | null>(null);
 
   // Load conversation history on mount
   useEffect(() => {
@@ -129,10 +139,10 @@ export default function Chat(){
         
         // Load initial room or default
   const cfg = await getSettings()
-  const cardIdx = cfg?.selectedCharacterCardIndex
+  const selectedCardIdx = cfg?.selectedCharacterCardIndex
         let roomId = 'default'
-        if (typeof cardIdx === 'number') {
-          const activeRoom = await getActiveChatRoom(cardIdx)
+        if (typeof selectedCardIdx === 'number') {
+          const activeRoom = await getActiveChatRoom(selectedCardIdx)
           if (activeRoom) roomId = activeRoom
         }
         setActiveRoomId(roomId)
@@ -141,11 +151,43 @@ export default function Chat(){
           setMessages(history)
         }
         const s = await getSettings();
+        
+        // Load persona TTS settings (사용자 음성)
         const idx = s?.selectedPersonaIndex ?? 0;
         const personas = s?.personas || [];
         const persona = personas[idx];
-        const card = persona?.characterData || null;
+        if (persona?.ttsProvider && persona.ttsProvider !== 'none') {
+          setPersonaTTS({
+            provider: persona.ttsProvider,
+            model: persona.ttsModel || '',
+            voice: persona.ttsVoice
+          });
+        } else {
+          setPersonaTTS(null);
+        }
+        
+        // Load character card (AI 캐릭터)
+        let card = null;
+        if (typeof selectedCardIdx === 'number' && Array.isArray(s?.characterCards)) {
+          const cardItem = s.characterCards[selectedCardIdx];
+          card = cardItem?.card || null;
+        }
         setPersonaCard(card);
+        
+        // Load character TTS settings from card (AI 음성)
+        const charTTSConfig = card?.data?.extensions?.characterTTS;
+        console.log('[Chat] Loading character TTS from card:', charTTSConfig);
+        if (charTTSConfig?.provider && charTTSConfig.provider !== 'none') {
+          setCharacterTTS({
+            provider: charTTSConfig.provider,
+            model: charTTSConfig.model || '',
+            voice: charTTSConfig.voice
+          });
+          console.log('[Chat] Character TTS configured:', { provider: charTTSConfig.provider, model: charTTSConfig.model });
+        } else {
+          setCharacterTTS(null);
+          console.log('[Chat] Character TTS not configured');
+        }
         // Prefer settings-defined regexScripts; fallback to card customScripts
         const cfgScripts = Array.isArray(s?.regexScripts) ? s.regexScripts : [];
         let normalized: RegexScript[] = cfgScripts
@@ -196,35 +238,121 @@ export default function Chat(){
     })();
   }, []);
 
+  // Reload character TTS when character card is updated
+  useEffect(() => {
+    const reloadCharacterTTS = async () => {
+      try {
+        const s = await getSettings();
+        const selectedCardIdx = s?.selectedCharacterCardIndex;
+        let card = null;
+        if (typeof selectedCardIdx === 'number' && Array.isArray(s?.characterCards)) {
+          const cardItem = s.characterCards[selectedCardIdx];
+          card = cardItem?.card || null;
+        }
+        
+        const charTTSConfig = card?.data?.extensions?.characterTTS;
+        console.log('[Chat] Reloading character TTS from card:', charTTSConfig);
+        if (charTTSConfig?.provider && charTTSConfig.provider !== 'none') {
+          setCharacterTTS({
+            provider: charTTSConfig.provider,
+            model: charTTSConfig.model || '',
+            voice: charTTSConfig.voice
+          });
+          console.log('[Chat] Character TTS updated:', { provider: charTTSConfig.provider, model: charTTSConfig.model, voice: charTTSConfig.voice });
+        } else {
+          setCharacterTTS(null);
+          console.log('[Chat] Character TTS cleared');
+        }
+      } catch (e) {
+        console.error('[Chat] Failed to reload character TTS', e);
+      }
+    };
+    
+    window.addEventListener('characterCardsUpdate', reloadCharacterTTS as any);
+    return () => {
+      window.removeEventListener('characterCardsUpdate', reloadCharacterTTS as any);
+    };
+  }, []);
+
   // Auto scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
+  // Synthesize persona TTS (for user input)
+  async function synthesizePersonaTTS(text: string): Promise<string> {
+    try {
+      if (!personaTTS || !text.trim()) return '';
+
+      const cleanedText = text.replace(/[,.!~?]+$/g, '').trim();
+      if (!cleanedText) return '';
+
+      const settings = await getSettings();
+      const requestBody: any = { 
+        text: cleanedText, 
+        provider: personaTTS.provider,
+        apiKey: personaTTS.provider === 'gemini' ? settings?.geminiApiKey : settings?.fishAudioApiKey
+      };
+
+      if (personaTTS.provider === 'gemini') {
+        requestBody.voice = personaTTS.voice || 'Zephyr';
+        if (personaTTS.model) requestBody.model = personaTTS.model;
+      } else if (personaTTS.provider === 'fishaudio') {
+        requestBody.fishModelId = personaTTS.model;
+      }
+
+      console.log('[Chat] Persona TTS request:', requestBody);
+
+      const response = await fetch('/api/tts/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (response.ok) {
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        return audioUrl;
+      } else {
+        console.error('[Chat] Persona TTS error:', response.status);
+        return '';
+      }
+    } catch (error) {
+      console.error('[Chat] Persona TTS error:', error);
+      return '';
+    }
+  }
+
   // Synthesize a TTS audio URL immediately (non-blocking playback)
   async function synthesizeTTS(text: string): Promise<string> {
     try {
+      // 캐릭터 TTS가 설정되어 있으면 사용안함 옵션을 선택한 경우 TTS 사용하지 않음
+      if (!characterTTS) {
+        console.log('[Chat] Character TTS not configured, skipping TTS');
+        return '';
+      }
+      
       // Pre-process text: remove trailing punctuation to prevent TTS model from adding unwanted continuation
       const cleanedText = text.replace(/[,.!~?]+$/g, '').trim();
       if (!cleanedText) return '';
 
       const settings = await getSettings();
-      const provider = settings?.ttsProvider || 'gemini';
+      const provider = characterTTS.provider;
       
       // Use correct API key and model based on provider
       let apiKey = '';
       let fishModelId = '';
       if (provider === 'fishaudio') {
         apiKey = settings?.fishAudioApiKey || '';
-        fishModelId = settings?.fishAudioModelId || '';
+        fishModelId = characterTTS.model || '';
       } else {
         apiKey = settings?.geminiApiKey || '';
       }
       
-      const voice = settings?.geminiTtsVoiceName || 'Zephyr';
-      const model = settings?.geminiTtsModel;
+      const voice = characterTTS.voice || 'Zephyr';
+      const model = characterTTS.model;
 
-      console.log('[Chat] TTS request:', { provider, voice: provider === 'gemini' ? voice : undefined, fishModelId: provider === 'fishaudio' ? fishModelId : undefined, textLength: text.length });
+      console.log('[Chat] Character TTS request:', { provider, voice: provider === 'gemini' ? voice : undefined, fishModelId: provider === 'fishaudio' ? fishModelId : undefined, textLength: text.length });
 
       const requestBody: any = { 
         text: cleanedText, 
@@ -305,6 +433,12 @@ export default function Chat(){
 
   // Attempt to play the next item strictly in order
   function attemptPlayNextOrdered(){
+    // 페르소나 TTS가 예정되어 있거나 재생 중이면 일반 TTS 재생하지 않음
+    if (personaTTSScheduledRef.current || personaTTSPlayingRef.current) {
+      console.log('[Chat] Persona TTS scheduled or playing, deferring response TTS');
+      return;
+    }
+    
     if (ttsPlayingRef.current) return;
     const nextSeq = ttsNextSeqToPlayRef.current;
     const nextItem = ttsQueueRef.current.find(i => i.seq === nextSeq);
@@ -564,9 +698,78 @@ export default function Chat(){
     setIsStreamingOrTTS(true); // Start streaming/TTS session
     
     // Reset TTS-related state immediately for new message
-    setTtsActiveMessageIndex(null); // DON'T set to message index yet - wait for TTS to start
+    setTtsActiveMessageIndex(null);
     setCompletedSentencesForDisplay([]);
     setCurrentTypingSentence('');
+
+    // 페르소나 TTS 재생 시작 (비동기로 백그라운드에서 실행)
+    let personaTTSPromise: Promise<void> | null = null;
+    if (personaTTS) {
+      console.log('[Chat] Persona TTS enabled, scheduling playback');
+      personaTTSScheduledRef.current = true; // 페르소나 TTS 예약됨
+      
+      personaTTSPromise = (async () => {
+        const personaTTSUrl = await synthesizePersonaTTS(text.trim());
+        
+        if (personaTTSUrl) {
+          personaTTSPlayingRef.current = true;
+          const audio = new Audio(personaTTSUrl);
+          
+          // 출력 장치 설정
+          try {
+            const settings = await getSettings();
+            const sinkId = (settings as any)?.selectedOutputId;
+            if (sinkId && typeof (audio as any).setSinkId === 'function') {
+              await (audio as any).setSinkId(sinkId);
+            }
+          } catch (e) {
+            console.error('[Chat] Persona TTS setSinkId failed:', e);
+          }
+
+          // 페르소나 TTS 재생
+          await new Promise<void>((resolve) => {
+            audio.onended = () => {
+              console.log('[Chat] Persona TTS playback ended');
+              URL.revokeObjectURL(personaTTSUrl);
+              personaTTSPlayingRef.current = false;
+              personaTTSScheduledRef.current = false; // 예약 해제
+              
+              // 1~2초 랜덤 대기 후 일반 TTS 재생 시작
+              const delay = 1000 + Math.random() * 1000; // 1000ms ~ 2000ms
+              console.log(`[Chat] Waiting ${delay.toFixed(0)}ms before starting response TTS`);
+              setTimeout(() => {
+                // TTS 큐에 쌓인 것들 재생 시작
+                attemptPlayNextOrdered();
+                resolve();
+              }, delay);
+            };
+            
+            audio.onerror = () => {
+              console.error('[Chat] Persona TTS playback error');
+              URL.revokeObjectURL(personaTTSUrl);
+              personaTTSPlayingRef.current = false;
+              personaTTSScheduledRef.current = false; // 예약 해제
+              // 에러 시에도 TTS 큐 재생 시도
+              attemptPlayNextOrdered();
+              resolve();
+            };
+            
+            audio.play().catch((e) => {
+              console.error('[Chat] Persona TTS play failed:', e);
+              URL.revokeObjectURL(personaTTSUrl);
+              personaTTSPlayingRef.current = false;
+              personaTTSScheduledRef.current = false; // 예약 해제
+              // 재생 실패 시에도 TTS 큐 재생 시도
+              attemptPlayNextOrdered();
+              resolve();
+            });
+          });
+        } else {
+          // URL 생성 실패 시에도 플래그 해제
+          personaTTSScheduledRef.current = false;
+        }
+      })();
+    }
 
     try {
       // Get settings
