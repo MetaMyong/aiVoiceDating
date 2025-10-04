@@ -27,6 +27,8 @@ export default function SettingsPage(){
   const [promptRightTab, setPromptRightTab] = useState<'params'|'blocks'|'other'>('blocks');
   // Save hook from AudioSettings to ensure latest audio selections are persisted before global save
   const audioSaveRef = useRef<null | (() => Promise<void>)>(null);
+  // Commit hook from PromptSettings to commit drafts before save
+  const promptCommitRef = useRef<null | (() => void)>(null);
   // Track expanded panels by block ID (stable across reorders)
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string,boolean>>({});
   const dragIndexRef = useRef<number|null>(null);
@@ -61,6 +63,12 @@ export default function SettingsPage(){
   if (audioSaveRef.current) {
     try { await audioSaveRef.current(); } catch (e) { /* ignore child save errors, continue */ }
   }
+  // Commit prompt drafts before reading
+  if (promptCommitRef.current) {
+    try { promptCommitRef.current(); } catch (e) { /* ignore */ }
+  }
+  // Wait a tick for state updates
+  await new Promise(resolve => setTimeout(resolve, 10));
   // Persist latest child-local edits if available
   const effectiveBlocks = promptLocalRef.current ?? promptBlocks;
   // Sync parent state to latest before save
@@ -88,7 +96,8 @@ export default function SettingsPage(){
         expandedBlocks={expandedBlocks}
         setExpandedBlocks={setExpandedBlocks}
         dragIndexRef={dragIndexRef}
-  promptLocalRef={promptLocalRef}
+        promptLocalRef={promptLocalRef}
+        promptCommitRef={promptCommitRef}
       />
     )
   }

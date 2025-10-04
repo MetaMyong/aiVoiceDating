@@ -13,7 +13,7 @@ export type PromptBlock = {
 }
 
 export default function PromptSettings(props: any){
-  const { cfg, setCfg, promptBlocks, setPromptBlocks, promptRightTab, expandedBlocks, setExpandedBlocks, dragIndexRef, promptLocalRef } = props
+  const { cfg, setCfg, promptBlocks, setPromptBlocks, promptRightTab, expandedBlocks, setExpandedBlocks, dragIndexRef, promptLocalRef, promptCommitRef } = props
 
   const [localBlocks, setLocalBlocks] = React.useState<PromptBlock[]>(() =>
     (promptBlocks || []).map((b: any, i: number) => (b.id ? b : { ...b, id: `block-${Date.now()}-${i}-${Math.random()}` }))
@@ -21,6 +21,10 @@ export default function PromptSettings(props: any){
   // keep latest localBlocks for beforeunload/debounce
   const localBlocksRef = React.useRef<PromptBlock[]>([])
   React.useEffect(() => { localBlocksRef.current = localBlocks }, [localBlocks])
+  
+  // Draft ref for prompt content to avoid re-renders on typing
+  const promptDraftsRef = React.useRef<Record<string, string>>({})
+  
   // track edit state to suppress autosave while typing
   const isEditingRef = React.useRef(false)
 
@@ -46,6 +50,13 @@ export default function PromptSettings(props: any){
   // Keep latest cfg in a ref to build newCfg without changing autoSave identity
   const cfgRef = React.useRef(cfg)
   React.useEffect(() => { cfgRef.current = cfg }, [cfg])
+
+  // Expose commitEdits via ref for parent to call before saving
+  React.useEffect(() => {
+    if (promptCommitRef) {
+      promptCommitRef.current = commitEdits
+    }
+  }, [promptCommitRef])
 
   const autoSave = React.useCallback(async (blocks: PromptBlock[]) => {
     try {
@@ -76,10 +87,25 @@ export default function PromptSettings(props: any){
   }
 
   const commitEdits = React.useCallback(() => {
-    const blocks = localBlocksRef.current
-    if (!blocks) return
-    isEditingRef.current = false
-    autoSave(blocks)
+    // First, commit all prompt drafts from ref
+    setLocalBlocks((prev) => {
+      const updated = prev.map(block => {
+        const draft = promptDraftsRef.current[block.id]
+        if (draft !== undefined && draft !== block.prompt) {
+          return { ...block, prompt: draft }
+        }
+        return block
+      })
+      return updated
+    })
+    
+    // Then save after a brief delay to ensure state is updated
+    setTimeout(() => {
+      const blocks = localBlocksRef.current
+      if (!blocks) return
+      isEditingRef.current = false
+      autoSave(blocks)
+    }, 0)
   }, [autoSave])
 
   const removeBlockSmart = (id: string, index: number) => {
@@ -324,12 +350,20 @@ export default function PromptSettings(props: any){
                           name={`prompt-${b.id}`}
                           className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 placeholder-slate-500 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                           rows={6}
-                          value={b.prompt}
+                          defaultValue={b.prompt}
                           onChange={(e) => {
-                            updateBlockField(i, { prompt: e.target.value })
+                            // Update ref only, no state change
+                            promptDraftsRef.current[b.id] = e.target.value
+                          }}
+                          onBlur={() => {
+                            // Commit to state on blur
+                            const draft = promptDraftsRef.current[b.id]
+                            if (draft !== undefined && draft !== b.prompt) {
+                              updateBlockField(i, { prompt: draft })
+                              commitEdits()
+                            }
                           }}
                           draggable={false}
-                          // save via header mousedown
                         />
                       </div>
                     )}

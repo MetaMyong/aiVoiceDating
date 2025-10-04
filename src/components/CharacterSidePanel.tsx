@@ -47,23 +47,17 @@ const LoreInput = React.memo(({
   isTextarea?: boolean
   inputMode?: string
 }) => {
-  console.log('[LoreInput RENDER]', id, 'value:', value)
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
   const isComposingRef = useRef(false)
   
   // Only update DOM value when prop changes externally (not from our own onChange)
   useEffect(() => {
-    console.log('[LoreInput useEffect]', id, 'value changed to:', value, 'hasFocus:', document.activeElement === inputRef.current)
     if (inputRef.current && document.activeElement !== inputRef.current) {
-      console.log('[LoreInput] Updating DOM value (not focused)')
       inputRef.current.value = value
-    } else if (document.activeElement === inputRef.current) {
-      console.log('[LoreInput] SKIPPING update - element is focused!')
     }
   }, [value, id])
   
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    console.log('[LoreInput onChange]', id, 'new value:', e.target.value, 'isComposing:', isComposingRef.current)
     if (!isComposingRef.current) {
       onChange(e.target.value)
     }
@@ -123,9 +117,6 @@ type Props = {
 // (debug component removed)
 
 const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, onChange }: Props) => {
-  const renderCount = useRef(0)
-  renderCount.current++
-  console.log('[CharacterSidePanel RENDER #' + renderCount.current + '] open:', open, 'personaIndex:', personaIndex)
   const [rooms, setRooms] = useState<Array<{ id: string, name: string }>>([])
   const [activeRoomId, setActiveRoomIdLocal] = useState<string>('')
   const [leftOffset, setLeftOffset] = useState<number>(0)
@@ -176,15 +167,12 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   // Use ref for card draft handlers to avoid re-creating
   const cardDraftHandlersRef = useRef({
     name: (val: string) => {
-      console.log('[Card Draft onChange] name', val)
       cardDraftsRef.current.name = val
     },
     desc: (val: string) => {
-      console.log('[Card Draft onChange] desc', val)
       cardDraftsRef.current.desc = val
     },
     globalOverride: (val: string) => {
-      console.log('[Card Draft onChange] globalOverride', val)
       cardDraftsRef.current.globalOverride = val
     }
   })
@@ -193,7 +181,6 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   
   // Commit card drafts to actual state on blur
   const commitCardDraft = useCallback((field: 'name' | 'desc' | 'globalOverride') => {
-    console.log('[commitCardDraft]', field, cardDraftsRef.current[field])
     if (field === 'name') setCardName(cardDraftsRef.current.name)
     else if (field === 'desc') setCardDesc(cardDraftsRef.current.desc)
     else if (field === 'globalOverride') setGlobalOverride(cardDraftsRef.current.globalOverride)
@@ -223,7 +210,6 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   }, [])
 
   const visibleLoreEntries = useMemo(() => {
-    console.log('[visibleLoreEntries recalculated] loreEntries.length:', loreEntries.length)
     return loreEntries
       .map((entry, originalIndex) => ({ entry, originalIndex }))
       .filter(({ entry }) => !shouldHideLoreEntry(entry))
@@ -232,16 +218,11 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   const hiddenLoreCount = loreEntries.length - visibleLoreEntries.length
 
   const patchLoreEntry = useCallback((index: number, patch: Partial<any> | ((entry: any) => any)) => {
-    console.log('[patchLoreEntry] index:', index, 'patch:', patch)
     setLoreEntries(prev => {
       if (!Array.isArray(prev) || index < 0 || index >= prev.length) return prev
       const current = prev[index] ?? {}
       const nextEntry = typeof patch === 'function' ? (patch as (entry: any) => any)(current) : { ...current, ...patch }
-      if (nextEntry === current) {
-        console.log('[patchLoreEntry] No change, returning prev')
-        return prev
-      }
-      console.log('[patchLoreEntry] Updating entry')
+      if (nextEntry === current) return prev
       const clone = prev.slice()
       clone[index] = nextEntry
       return clone
@@ -292,12 +273,8 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
 
   // Commit draft to actual state
   const commitLoreDraft = useCallback((key: string, index: number) => {
-    console.log('[commitLoreDraft] key:', key, 'index:', index, 'draft:', loreDraftsRef.current[key])
     const draft = loreDraftsRef.current[key]
-    if (!draft) {
-      console.log('[commitLoreDraft] No draft found!')
-      return
-    }
+    if (!draft) return
     
     setLoreEntries(prev => {
       if (!Array.isArray(prev) || index < 0 || index >= prev.length) return prev
@@ -376,19 +353,15 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     if (!loreDraftHandlersRef.current[entryKey]) {
       loreDraftHandlersRef.current[entryKey] = {
         name: (val: string) => {
-          console.log(`[Draft onChange] lore-name`, entryKey, 'new value:', val)
           loreDraftsRef.current[entryKey] = { ...loreDraftsRef.current[entryKey], name: val }
         },
         order: (val: string) => {
-          console.log(`[Draft onChange] lore-order`, entryKey, 'new value:', val)
           loreDraftsRef.current[entryKey] = { ...loreDraftsRef.current[entryKey], order: val }
         },
         keys: (val: string) => {
-          console.log(`[Draft onChange] lore-keys`, entryKey, 'new value:', val)
           loreDraftsRef.current[entryKey] = { ...loreDraftsRef.current[entryKey], keys: val }
         },
         content: (val: string) => {
-          console.log(`[Draft onChange] lore-content`, entryKey, 'new value:', val)
           loreDraftsRef.current[entryKey] = { ...loreDraftsRef.current[entryKey], content: val }
         }
       }
@@ -400,19 +373,15 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     if (!scriptDraftHandlersRef.current[scriptKey]) {
       scriptDraftHandlersRef.current[scriptKey] = {
         name: (val: string) => {
-          console.log(`[Draft onChange] script-name`, scriptKey, 'new value:', val)
           scriptDraftsRef.current[scriptKey] = { ...scriptDraftsRef.current[scriptKey], name: val }
         },
         in: (val: string) => {
-          console.log(`[Draft onChange] script-in`, scriptKey, 'new value:', val)
           scriptDraftsRef.current[scriptKey] = { ...scriptDraftsRef.current[scriptKey], in: val }
         },
         flags: (val: string) => {
-          console.log(`[Draft onChange] script-flags`, scriptKey, 'new value:', val)
           scriptDraftsRef.current[scriptKey] = { ...scriptDraftsRef.current[scriptKey], flags: val }
         },
         out: (val: string) => {
-          console.log(`[Draft onChange] script-out`, scriptKey, 'new value:', val)
           scriptDraftsRef.current[scriptKey] = { ...scriptDraftsRef.current[scriptKey], out: val }
         }
       }
@@ -487,32 +456,63 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   }
 
   const saveAll = () => {
-    const next = {
-      ...persona,
-      name: cardName,
-      description: cardDesc,
-      characterData: {
-        ...v3,
-        data: {
-          ...v3.data,
-          name: cardName,
-          description: cardDesc,
-          post_history_instructions: globalOverride,
-          character_book: {
-            ...(v3.data.character_book||{}),
-            entries: loreEntries.map(({ _lid, _io, ...rest }: any) => ({ ...rest, insertion_order: Number(_io ?? rest.insertion_order ?? 0) || 0 }))
-          },
-          extensions: {
-            ...(v3.data.extensions||{}),
-            risuai: {
-              ...((v3.data.extensions||{}).risuai||{}),
-              customScripts: scripts.map((s:any) => ({ id: s.id, name: s.name, type: s.type, in: s.in, out: s.out, flags: s.flags, enabled: s.enabled }))
+    // Commit all drafts from refs before saving
+    const finalCardName = cardDraftsRef.current.name
+    const finalCardDesc = cardDraftsRef.current.desc
+    const finalGlobalOverride = cardDraftsRef.current.globalOverride
+    
+    // Update states with draft values
+    setCardName(finalCardName)
+    setCardDesc(finalCardDesc)
+    setGlobalOverride(finalGlobalOverride)
+    
+    // Commit all lore drafts
+    loreEntries.forEach((entry, idx) => {
+      const key = String(entry?._lid || idx)
+      const draft = loreDraftsRef.current[key]
+      if (draft) {
+        commitLoreDraft(key, idx)
+      }
+    })
+    
+    // Commit all script drafts
+    scripts.forEach((script, idx) => {
+      const key = String(script?.id || idx)
+      const draft = scriptDraftsRef.current[key]
+      if (draft) {
+        commitScriptDraft(key, idx)
+      }
+    })
+    
+    // Use setTimeout to ensure state updates are processed
+    setTimeout(() => {
+      const next = {
+        ...persona,
+        name: finalCardName,
+        description: finalCardDesc,
+        characterData: {
+          ...v3,
+          data: {
+            ...v3.data,
+            name: finalCardName,
+            description: finalCardDesc,
+            post_history_instructions: finalGlobalOverride,
+            character_book: {
+              ...(v3.data.character_book||{}),
+              entries: loreEntries.map(({ _lid, _io, ...rest }: any) => ({ ...rest, insertion_order: Number(_io ?? rest.insertion_order ?? 0) || 0 }))
+            },
+            extensions: {
+              ...(v3.data.extensions||{}),
+              risuai: {
+                ...((v3.data.extensions||{}).risuai||{}),
+                customScripts: scripts.map((s:any) => ({ id: s.id, name: s.name, type: s.type, in: s.in, out: s.out, flags: s.flags, enabled: s.enabled }))
+              }
             }
           }
         }
       }
-    }
-    onChange(next)
+      onChange(next)
+    }, 0)
   }
 
   // UI helpers
