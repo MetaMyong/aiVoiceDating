@@ -12,20 +12,11 @@ export default function App(){
   const [panelOpen, setPanelOpen] = React.useState(false)
   const [panelPersonaIndex, setPanelPersonaIndex] = React.useState<number>(0)
   const [panelPersona, setPanelPersona] = React.useState<any | null>(null)
-  const closeTimerRef = React.useRef<number | null>(null)
-  const PANEL_ANIMATION_MS = 720
 
   const closePanelWithDelay = React.useCallback(() => {
-    if (closeTimerRef.current) {
-      window.clearTimeout(closeTimerRef.current)
-      closeTimerRef.current = null
-    }
     setPanelOpen(false)
-    closeTimerRef.current = window.setTimeout(() => {
-      setPanelPersona(null)
-      closeTimerRef.current = null
-    }, PANEL_ANIMATION_MS)
-  }, [PANEL_ANIMATION_MS])
+    setPanelPersona(null)
+  }, [])
 
   React.useEffect(() => {
     const check = async () => {
@@ -42,10 +33,6 @@ export default function App(){
     const onOpenEditor = async (e: any) => {
       try{
         const cfg = await getSettings()
-        if (closeTimerRef.current) {
-          window.clearTimeout(closeTimerRef.current)
-          closeTimerRef.current = null
-        }
         const list = cfg?.characterCards || []
         const index = e?.detail?.index ?? cfg?.selectedCharacterCardIndex ?? 0
         // 안전장치: 페르소나 배열이 없으면 settings.personas를 이용해 최소한 이름/설명만 구성
@@ -70,13 +57,6 @@ export default function App(){
       window.removeEventListener('characterSelectionChanged', onChange as any)
       window.removeEventListener('characterCardsUpdate', onChange as any)
       window.removeEventListener('openCardEditor', onOpenEditor as any)
-    }
-  }, [])
-
-  React.useEffect(() => () => {
-    if (closeTimerRef.current) {
-      window.clearTimeout(closeTimerRef.current)
-      closeTimerRef.current = null
     }
   }, [])
 
