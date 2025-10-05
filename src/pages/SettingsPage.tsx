@@ -29,12 +29,112 @@ export default function SettingsPage(){
   const [loadingFishModels, setLoadingFishModels] = useState(false);
   const [fishError, setFishError] = useState('');
 
-  const [promptBlocks, setPromptBlocks] = useState<any[]>([
-    { id: 'block-sys-1', name: '시스템 프롬프트', type: 'pure', prompt: '# Persona\nYou are AI assistant. Always respond with helpful 2 to 4 sentences in Korean. DO NOT USE *MARKDOWN* or Emojis, () or [] brackets.', role: 'user' },
-    { id: 'block-conv-2', name: '대화 이력', type: 'conversation', prompt: '', role: 'user' },
-    { id: 'block-input-3', name: '사용자 입력', type: 'pure', prompt: '{{user_input}}', role: 'user' }
-  ]);
-  const [promptRightTab, setPromptRightTab] = useState<'params'|'blocks'|'other'>(() => {
+  const [promptBlocks, setPromptBlocks] = useState<any[]>(() => {
+    // 초기 프리셋 교체: 요청한 순서/내용으로 구성
+    const now = Date.now();
+    const rid = (suf: string) => `block-${now}-${Math.random().toString(36).slice(2)}-${suf}`;
+    return [
+      {
+        id: rid('sys'),
+        name: '시스템 프롬프트',
+        type: 'system',
+        role: 'system',
+        prompt:
+          '# Persona\n' +
+          "Let's start role playing. From now on, you are {{char}}.\n\n" +
+          '# Rules\n' +
+          '- Speak Korean only.\n' +
+          '- Keep responses concise (2~4 sentences) unless asked otherwise.\n' +
+          '- Do not use markdown or emoji, and avoid () or [] brackets.'
+      },
+      {
+        id: rid('user-role'),
+        name: '페르소나 프롬프트',
+        type: 'pure',
+        role: 'user',
+        prompt: '# User Role\nUser is {{user}}\n\n## User Description\n{{user_description}}'
+      },
+      {
+        id: rid('ai-role'),
+        name: '캐릭터 프롬프트',
+        type: 'pure',
+        role: 'user',
+        prompt: '# AI Role\nAI is {{char}}\n\n## AI Description\n{{char_description}}\n---'
+      },
+      {
+        id: rid('lore-start'),
+        name: '로어북 시작',
+        type: 'pure',
+        role: 'user',
+        prompt: '# Lore\n--- Lore Start ---'
+      },
+      {
+        id: rid('lore'),
+        name: '로어북',
+        type: 'lorebook',
+        role: 'user',
+        prompt: ''
+      },
+      {
+        id: rid('lore-end'),
+        name: '로어북 끝',
+        type: 'pure',
+        role: 'user',
+        prompt: '--- Lore End ---'
+      },
+      {
+        id: rid('chat-start'),
+        name: '대화 시작',
+        type: 'pure',
+        role: 'user',
+        prompt: '# Chat Log\n\n--- Chat Log Start ---'
+      },
+      {
+        id: rid('conv'),
+        name: '대화 이력',
+        type: 'conversation',
+        role: 'user',
+        prompt: '',
+        count: 10
+      },
+      {
+        id: rid('chat-end'),
+        name: '대화 끝',
+        type: 'pure',
+        role: 'user',
+        prompt: '--- Chat Log End ---'
+      },
+      {
+        id: rid('go'),
+        name: '글로벌 노트 덮어쓰기',
+        type: 'global_override',
+        role: 'user',
+        prompt: ''
+      },
+      {
+        id: rid('final-insert'),
+        name: '최종 삽입',
+        type: 'final_insert',
+        role: 'user',
+        prompt: ''
+      },
+      {
+        id: rid('author-notes'),
+        name: '작가의 노트',
+        type: 'author_notes',
+        role: 'user',
+        prompt: ''
+      },
+      {
+        id: rid('user-input'),
+        name: '유저 입력',
+        type: 'pure',
+        role: 'user',
+        prompt: '# User Input\n```\n{{user_input}}\n```'
+      }
+    ]
+  });
+  const [promptRightTab, setPromptRightTab] = useState<'params'|'blocks'|'scripts'|'other'>(() => {
     const saved = sessionStorage.getItem('settingsPromptRightTab');
     return (saved as any) || 'blocks';
   });
@@ -42,6 +142,10 @@ export default function SettingsPage(){
   const audioSaveRef = useRef<null | (() => Promise<void>)>(null);
   // Commit hook from PromptSettings to commit drafts before save
   const promptCommitRef = useRef<null | (() => void)>(null);
+  // Helper: commit prompt/script drafts before switching prompt tabs
+  const commitPromptDrafts = () => {
+    try { if (promptCommitRef.current) promptCommitRef.current() } catch {}
+  }
   // Track expanded panels by block ID (stable across reorders)
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string,boolean>>({});
   const dragIndexRef = useRef<number|null>(null);
@@ -205,9 +309,10 @@ export default function SettingsPage(){
                 </>
               ) : leftSection === 'prompt' ? (
                 <>
-                  <button onClick={()=>setPromptRightTab('params')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='params'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>파라미터</button>
-                  <button onClick={()=>setPromptRightTab('blocks')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='blocks'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>프롬프트 블록</button>
-                  <button onClick={()=>setPromptRightTab('other')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='other'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>기타</button>
+                  <button onClick={()=>{ commitPromptDrafts(); setPromptRightTab('params') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='params'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>파라미터</button>
+                  <button onClick={()=>{ commitPromptDrafts(); setPromptRightTab('blocks') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='blocks'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>프롬프트 블록</button>
+                  <button onClick={()=>{ commitPromptDrafts(); setPromptRightTab('scripts') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='scripts'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>스크립트</button>
+                  <button onClick={()=>{ commitPromptDrafts(); setPromptRightTab('other') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='other'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>기타</button>
                 </>
               ) : null}
             </div>
