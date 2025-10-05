@@ -125,8 +125,8 @@ app.post('/api/llm/stream', async (req, res) => {
       return res.end();
     }
 
-    // Build Gemini JSON body from messages (system + contents)
-    let jsonBody;
+  // Build Gemini JSON body from messages (system + contents)
+  let jsonBody;
     if (Array.isArray(messages) && messages.length && Object.prototype.hasOwnProperty.call(messages[0], 'content')) {
       const systemTexts = messages.filter(m => m.role === 'system').map(m => String(m.content || '')).filter(Boolean);
       const contents = messages.filter(m => m.role !== 'system').map(m => ({
@@ -134,32 +134,39 @@ app.post('/api/llm/stream', async (req, res) => {
         parts: [{ text: String(m.content || '') }]
       }));
       
-      // Prepare generationConfig with thinking support
-      const finalGenConfig = generationConfig ? { ...generationConfig } : {};
-      
-      // Enable thinking process for thinking models
-      const isThinkingModel = MODEL_NAME.toLowerCase().includes('thinking') || 
-                             MODEL_NAME.toLowerCase().includes('reasoning');
-      
-      if (isThinkingModel && !finalGenConfig.thinkingConfig) {
-        // Default to 'auto' mode with includeThoughts
-        finalGenConfig.thinkingConfig = { includeThoughts: true };
+      // Prepare generationConfig with thinking support and sanitize unsupported fields
+      const rawGenConfig = generationConfig ? { ...generationConfig } : {};
+      const finalGenConfig = {};
+
+      // Whitelist supported generationConfig keys to avoid INVALID_ARGUMENT
+      const allowKeys = new Set([
+        'maxOutputTokens',
+        'temperature',
+        'topP',
+        'topK',
+        'candidateCount',
+        'stopSequences',
+        'responseMimeType',
+        'responseModalities'
+      ]);
+      for (const [k, v] of Object.entries(rawGenConfig)) {
+        if (k === 'thinkingTokens') continue; // handled below
+        if (allowKeys.has(k) && v !== undefined) {
+          finalGenConfig[k] = v;
+        }
       }
+
+      // Note: thinkingConfig is omitted for now to avoid API incompatibilities.
       
+      // Note: safetySettings are omitted to avoid incompatibilities with changing API enums.
+      // Rely on provider defaults unless explicitly configured by the client.
       jsonBody = {
         ...(systemTexts.length ? { systemInstruction: { parts: [{ text: systemTexts.join('\n') }] } } : {}),
         contents,
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' },
-        ],
         ...(Object.keys(finalGenConfig).length > 0 ? { generationConfig: finalGenConfig } : {})
       };
     } else {
-      jsonBody = { contents: [], ...(generationConfig ? { generationConfig } : {}) };
+  jsonBody = { contents: [], ...(generationConfig ? { generationConfig } : {}) };
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:streamGenerateContent?key=${GEMINI_KEY}&alt=sse`;
@@ -181,24 +188,30 @@ app.post('/api/llm/stream', async (req, res) => {
 
       if (!upstream.ok) {
         const errTxt = await upstream.text().catch(() => '[no body]');
-        res.write(`data: ${JSON.stringify({ error: `Gemini error ${upstream.status}: ${errTxt}` })}\n\n`);
+        console.error('[API] Upstream Gemini error', upstream.status, errTxt);
+        res.write(`data: ${JSON.stringify({ error: `Gemini error ${upstream.status}`, detail: errTxt })}\n\n`);
         return res.end();
       }
 
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
+      let aborted = false;
+      // Abort upstream when client disconnects
+      req.on('close', () => {
+        aborted = true;
+        try { reader.cancel(); } catch {}
+      });
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
+        if (aborted) break;
         const out = decoder.decode(value, { stream: true });
-        if (out) {
-          res.write(out);
-        }
+        if (out) res.write(out);
       }
       res.end();
     } catch (e) {
       console.error('[API] Stream proxy error:', e);
-      res.write(`data: ${JSON.stringify({ error: e.message || String(e) })}\n\n`);
+      try { res.write(`data: ${JSON.stringify({ error: e.message || String(e) })}\n\n`); } catch {}
       res.end();
     }
 
