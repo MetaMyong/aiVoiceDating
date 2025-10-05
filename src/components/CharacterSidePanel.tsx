@@ -982,7 +982,6 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                       <div className="flex items-center gap-3 text-xs text-slate-300">
                         <label htmlFor={`lore-selective-${entry._lid||originalIndex}`} className="flex items-center gap-1"><input id={`lore-selective-${entry._lid||originalIndex}`} name={`lore-selective-${entry._lid||originalIndex}`} type="checkbox" checked={!!entry.selective} onChange={e=>patchLoreEntry(originalIndex, { selective: e.target.checked })} /> 멀티키(모두 충족)</label>
                         <label htmlFor={`lore-constant-${entry._lid||originalIndex}`} className="flex items-center gap-1"><input id={`lore-constant-${entry._lid||originalIndex}`} name={`lore-constant-${entry._lid||originalIndex}`} type="checkbox" checked={!!entry.constant} onChange={e=>patchLoreEntry(originalIndex, { constant: e.target.checked })} /> 언제나 활성화</label>
-                        <label htmlFor={`lore-useregex-${entry._lid||originalIndex}`} className="flex items-center gap-1"><input id={`lore-useregex-${entry._lid||originalIndex}`} name={`lore-useregex-${entry._lid||originalIndex}`} type="checkbox" checked={!!entry.use_regex} onChange={e=>patchLoreEntry(originalIndex, { use_regex: e.target.checked })} /> 정규식</label>
                       </div>
                           <label htmlFor={`lore-content-${entry._lid||originalIndex}`} className="sr-only">내용</label>
                           <LoreInput
