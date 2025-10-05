@@ -260,7 +260,7 @@ export default function Chat(){
 
   // Reload character TTS when character card is updated
   useEffect(() => {
-    const reloadCharacterTTS = async () => {
+    const reloadFromCard = async () => {
       try {
         const s = await getSettings();
         const selectedCardIdx = s?.selectedCharacterCardIndex;
@@ -283,14 +283,58 @@ export default function Chat(){
           setCharacterTTS(null);
           console.log('[Chat] Character TTS cleared');
         }
+
+        // Also reload regex scripts and assets immediately so they take effect without refresh
+        const cfgScripts = Array.isArray(s?.regexScripts) ? s.regexScripts : [];
+        let normalized: RegexScript[] = cfgScripts
+          .map((r: any): RegexScript => ({ id:r.id, name:r.name, type:r.type||'request', in:String(r.in||''), out:String(r.out||''), flags:r.flags||'g', enabled: r.enabled!==false }))
+          .filter((r: RegexScript) => r.in && (r.out!==undefined));
+        if (!normalized.length) {
+          const rs = card?.data?.extensions?.risuai?.customScripts || [];
+          normalized = Array.isArray(rs)
+            ? rs
+                .map((r: any): RegexScript => ({
+                  id: r.id,
+                  name: r.name || r.title || '',
+                  type: (r.type === 'input' || r.type === 'output' || r.type === 'request' || r.type === 'display' || r.type === 'disabled') ? r.type : 'display',
+                  in: r.in || r.regex_in || '',
+                  out: r.out || r.regex_out || '',
+                  flags: r.flags || 'g',
+                  enabled: r.enabled !== false
+                }))
+                .filter((r: RegexScript) => r.in && (r.out!==undefined))
+            : [];
+        }
+        setRegexScripts(normalized);
+
+        const amap: Record<string,string> = {};
+        const assets = card?.data?.assets || [];
+        if (Array.isArray(assets)) {
+          for (const a of assets) {
+            if (a?.name && a?.uri) {
+              amap[String(a.name)] = String(a.uri);
+            }
+          }
+        }
+        const extAssets = card?.data?.extensions?.risuai?.additionalAssets || [];
+        if (Array.isArray(extAssets)) {
+          for (const ea of extAssets) {
+            if (ea && ea.length >= 2) {
+              const nm = ea[0];
+              const uri = ea[1];
+              amap[String(nm)] = String(uri);
+            }
+          }
+        }
+        setAssetMap(amap);
       } catch (e) {
         console.error('[Chat] Failed to reload character TTS', e);
       }
     };
     
-    window.addEventListener('characterCardsUpdate', reloadCharacterTTS as any);
+    window.addEventListener('characterCardsUpdate', reloadFromCard as any);
     return () => {
-      window.removeEventListener('characterCardsUpdate', reloadCharacterTTS as any);
+      window.removeEventListener('characterCardsUpdate', reloadFromCard as any);
     };
   }, []);
 
@@ -702,9 +746,14 @@ export default function Chat(){
   async function sendMessage(text: string) {
     if (!text.trim()) return;
 
+    // Apply input regex transforms to the user's input BEFORE anything else
+    const rawInput = text.trim();
+    const transformedInputForDisplay = applyRegexToInput(rawInput);
+
     const userMessage: Message = {
       role: 'user',
-      text: text.trim(),
+      // Show transformed text in the chat as well (입력문 수정은 UI에 반영)
+      text: transformedInputForDisplay,
       timestamp: new Date().toISOString()
     };
 
@@ -729,7 +778,8 @@ export default function Chat(){
       personaTTSScheduledRef.current = true; // 페르소나 TTS 예약됨
       
       personaTTSPromise = (async () => {
-        const personaTTSUrl = await synthesizePersonaTTS(text.trim());
+        // Use transformed input for persona TTS as well
+        const personaTTSUrl = await synthesizePersonaTTS(transformedInputForDisplay);
         
         if (personaTTSUrl) {
           personaTTSPlayingRef.current = true;
@@ -810,13 +860,10 @@ export default function Chat(){
   try { const fresh = await getRoomAuthorNotes(activeRoomIdRef.current || activeRoomId || 'default'); if (typeof fresh === 'string') latestAuthorNotes = fresh; } catch {}
   let builtMessages = await buildPromptMessages(promptBlocks, messages, { authorNotes: latestAuthorNotes });
       
-      // Apply input regex transforms to user input BEFORE sending
-      const transformedInput = applyRegexToInput(text.trim());
-
       // Replace {{user_input}} placeholder with transformed user input
       builtMessages = builtMessages.map(msg => ({
         ...msg,
-        content: msg.content.replace(/\{\{user_input\}\}/g, transformedInput)
+        content: msg.content.replace(/\{\{user_input\}\}/g, transformedInputForDisplay)
       }));
 
       // Apply request-data regex transforms to the entire prompt payload
@@ -1189,10 +1236,29 @@ export default function Chat(){
       }
       // Replace asset://name with actual data URI from card assets
       out = out.replace(/asset:\/\/([A-Za-z0-9_\-\.]+)/g, (_m, name) => assetMap[name] || _m);
-      const changed = out !== text;
-      return { html: out, changed };
+      // Sanitize to disallow JS while allowing HTML/CSS
+      const sanitized = sanitizeDisplayHtml(out);
+      const changed = sanitized !== text;
+      return { html: sanitized, changed };
     } catch {
       return { html: text, changed: false };
+    }
+  }
+
+  // Very lightweight sanitizer: remove <script> tags, inline event handlers, and javascript: URLs
+  function sanitizeDisplayHtml(html: string): string {
+    try {
+      let out = html;
+      // Remove script tags entirely
+      out = out.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+      // Remove on*="..." or on*='...' or on*=unquoted
+      out = out.replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+      // Neutralize javascript: in href/src/style urls
+  out = out.replace(/\s(href|src)\s*=\s*(['"])\s*javascript:[^'"]*\2/gi, ' $1="#"');
+      out = out.replace(/url\(\s*javascript:[^)]+\)/gi, 'url(#)');
+      return out;
+    } catch {
+      return html;
     }
   }
 
@@ -1272,19 +1338,23 @@ export default function Chat(){
               >
                 <div className="whitespace-pre-wrap break-words text-sm md:text-base">
                   {msg.role === 'assistant' && ttsActiveMessageIndex === idx ? (
-                    <>
-                      {completedSentencesForDisplay.length > 0 && completedSentencesForDisplay.join(' ')}
-                      {completedSentencesForDisplay.length > 0 && currentTypingSentence && ' '}
-                      {currentTypingSentence}
-                      {!currentTypingSentence && completedSentencesForDisplay.length === 0 && '\u200B'}
-                    </>
+                    (() => {
+                      const combined = [
+                        completedSentencesForDisplay.join(' '),
+                        completedSentencesForDisplay.length > 0 && currentTypingSentence ? ' ' + currentTypingSentence : (!completedSentencesForDisplay.length && currentTypingSentence ? currentTypingSentence : '')
+                      ].join('');
+                      if (!combined) return '\u200B';
+                      const tr = applyRegexToText(combined);
+                      if (tr.changed) {
+                        return <div dangerouslySetInnerHTML={{ __html: tr.html }} />
+                      }
+                      return combined;
+                    })()
                   ) : (
                     (() => {
-                      if (msg.role === 'assistant') {
-                        const tr = applyRegexToText(msg.text);
-                        if (tr.changed) {
-                          return <div dangerouslySetInnerHTML={{ __html: tr.html }} />
-                        }
+                      const tr = applyRegexToText(msg.text);
+                      if (tr.changed) {
+                        return <div dangerouslySetInnerHTML={{ __html: tr.html }} />
                       }
                       return msg.text
                     })()
