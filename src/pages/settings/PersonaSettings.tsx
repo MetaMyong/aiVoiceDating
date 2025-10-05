@@ -3,6 +3,8 @@ import { IconDownload, IconUpload, IconCamera, IconTrash, IconUser } from '../..
 import { pushToast } from '../../components/Toast'
 import CharacterSidePanel from '../../components/CharacterSidePanel'
 import { setSettings as idbSetSettings, getSettings as idbGetSettings } from '../../lib/indexeddb'
+import SmartInput from '../../components/inputs/SmartInput'
+import SmartTextarea from '../../components/inputs/SmartTextarea'
 
 interface Persona {
   name: string
@@ -133,7 +135,7 @@ export default function PersonaSettings(props: any) {
               // UTF-8로 디코딩
               const decoded = new TextDecoder('utf-8').decode(bytes)
               const json = JSON.parse(decoded)
-              console.log(`${key} 데이터 추출 성공:`, json)
+              
               return json
             } catch (e) {
               console.warn(`${key} 데이터 파싱 실패:`, e)
@@ -418,8 +420,7 @@ export default function PersonaSettings(props: any) {
   function applyPersonaFromPanel(updatedPersona: Persona) {
     const updated = [...personas]
     updated[selectedIndex] = { ...updatedPersona }
-    console.log('[PersonaSettings] applyPersonaFromPanel called with:', updatedPersona)
-    console.log('[PersonaSettings] characterTTS in characterData:', updatedPersona.characterData?.data?.extensions?.characterTTS)
+    
     setPersonas(updated)
     // Update parent cfg state immediately
     setCfg((prev: any) => ({ ...prev, personas: updated, selectedPersonaIndex: selectedIndex }))
@@ -428,7 +429,7 @@ export default function PersonaSettings(props: any) {
       try{
         const latest = await idbGetSettings()
         await idbSetSettings({ ...(latest||{}), personas: updated, selectedPersonaIndex: selectedIndex })
-        console.log('[PersonaSettings] Saved to IndexedDB:', { personas: updated })
+        
       }catch(e){
         console.error('[PersonaSettings] Failed to save to IndexedDB:', e)
       }
@@ -614,10 +615,9 @@ export default function PersonaSettings(props: any) {
                 <label className="flex text-sm font-bold text-slate-300 mb-3 items-center gap-2">
                   <span className="text-teal-400">✨</span> 이름
                 </label>
-                <input
-                  type="text"
+                <SmartInput
                   value={selectedPersona.name}
-                  onChange={(e) => updatePersonaName(e.target.value)}
+                  onCommit={(val)=>{ updatePersonaName(val) }}
                   className="w-full px-5 py-3.5 bg-slate-800/60 border-2 border-slate-700/50 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all duration-200 shadow-inner"
                   placeholder="페르소나 이름"
                 />
@@ -627,11 +627,12 @@ export default function PersonaSettings(props: any) {
                 <label className="flex text-sm font-bold text-slate-300 mb-3 items-center gap-2">
                   <span className="text-cyan-400">📝</span> 설명
                 </label>
-                <textarea
+                <SmartTextarea
                   value={selectedPersona.description}
-                  onChange={(e) => updatePersonaDescription(e.target.value)}
+                  onCommit={(val)=>{ updatePersonaDescription(val) }}
                   className="w-full px-5 py-3.5 bg-slate-800/60 border-2 border-slate-700/50 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all duration-200 min-h-[280px] resize-none font-mono text-sm shadow-inner"
                   placeholder="페르소나에 대한 설명을 입력하세요..."
+                  rows={12}
                 />
               </div>
             </div>

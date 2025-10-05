@@ -24,6 +24,7 @@ export default function SettingsPage(){
 
   const [cfg, setCfg] = useState<any>({});
   const [status, setStatus] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const [fishModels, setFishModels] = useState<Array<any>>([]);
   const [loadingFishModels, setLoadingFishModels] = useState(false);
@@ -146,6 +147,13 @@ export default function SettingsPage(){
   const commitPromptDrafts = () => {
     try { if (promptCommitRef.current) promptCommitRef.current() } catch {}
   }
+  // Helper: commit all child drafts (audio + prompt)
+  const commitAllDrafts = async () => {
+    try { if (promptCommitRef.current) promptCommitRef.current() } catch {}
+    try { if (audioSaveRef.current) await audioSaveRef.current() } catch {}
+    // yield to flush React state queues
+    await new Promise(res => setTimeout(res, 0));
+  }
   // Track expanded panels by block ID (stable across reorders)
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string,boolean>>({});
   const dragIndexRef = useRef<number|null>(null);
@@ -189,41 +197,114 @@ export default function SettingsPage(){
     })();
   },[]);
 
+  // Best-effort guard: commit drafts when page is being hidden or unloaded
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      try { if (promptCommitRef.current) promptCommitRef.current() } catch {}
+      // cannot await in beforeunload; fire-and-forget audio save
+      try { if (audioSaveRef.current) audioSaveRef.current() } catch {}
+    }
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        try { if (promptCommitRef.current) promptCommitRef.current() } catch {}
+        try { if (audioSaveRef.current) audioSaveRef.current() } catch {}
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [])
+
+  
+
   // audio logic moved to AudioSettings component
 
   async function saveCfg(){
+    if (saving) return;
+    
     try{
-  // Ensure latest audio settings are saved before consolidating cfg
-  if (audioSaveRef.current) {
-    try { await audioSaveRef.current(); } catch (e) { /* ignore child save errors, continue */ }
-  }
-  // Commit prompt drafts before reading
-  if (promptCommitRef.current) {
-    try { promptCommitRef.current(); } catch (e) { /* ignore */ }
-  }
-  // Wait a tick for state updates
-  await new Promise(resolve => setTimeout(resolve, 10));
-  // Persist latest child-local edits if available
-  const effectiveBlocks = promptLocalRef.current ?? promptBlocks;
-  // Sync parent state to latest before save
-  setPromptBlocks(effectiveBlocks);
-  // Read latest settings from IndexedDB and merge with current cfg state
-  const latest = await idbGetSettings();
-  
-  console.log('[SettingsPage] saveCfg - cfg.personas:', cfg?.personas);
-  console.log('[SettingsPage] saveCfg - cfg.personas[1].characterData.extensions.characterTTS:', cfg?.personas?.[1]?.characterData?.data?.extensions?.characterTTS);
-  
-  // cfg에는 페르소나 정보 등 최신 상태가 들어있으므로 cfg를 우선으로 병합
-  await idbSetSettings({ ...(latest || {}), ...cfg, promptBlocks: effectiveBlocks });
+      // 0) Directly read the live value from the active element if it's an input/textarea
+      // This is the most reliable way to get the latest value on mousedown, before blur fires.
+      let liveEditText: { id: string, value: string } | null = null;
+      try {
+        const ae: any = document.activeElement as any
+        if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT') && ae.id.startsWith('prompt-')) {
+          
+          liveEditText = { id: ae.id.replace('prompt-', ''), value: ae.value };
+        }
+      } catch (e) { console.error('[SettingsPage] Failed to read active element', e) }
+
+      // 1) Commit all other drafts (just in case)
+      if (promptCommitRef.current) {
+        try { 
+          
+          promptCommitRef.current(); 
+        } catch (e) { console.error('[SettingsPage] promptCommitRef failed', e) }
+      }
+      
+      
+      let effectiveBlocks = promptLocalRef.current ?? promptBlocks;
+
+      // 2) Apply the live value read in step 0, which is the highest priority
+      if (liveEditText && Array.isArray(effectiveBlocks)) {
+        const newBlocks = effectiveBlocks.map(b => {
+          if (b.id === liveEditText!.id) {
+            if (b.prompt !== liveEditText!.value) {
+              
+              return { ...b, prompt: liveEditText!.value };
+            }
+          }
+          return b;
+        });
+        effectiveBlocks = newBlocks;
+      }
+      
+      // 3) Sync parent state to latest before save (prevents UI rollback)
+      
+      // This call is now primarily for ensuring consistency before saving,
+      // as interactive commits should have already updated the state.
+      setPromptBlocks(effectiveBlocks);
+
+      // 4) Now set saving UI state
+      
+      setSaving(true);
+      try { document.body.classList.add('saving'); } catch {}
+
+      // Allow state to propagate
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // 5) Ensure latest audio settings are saved
+      if (audioSaveRef.current) {
+        try { 
+          
+          await audioSaveRef.current(); 
+        } catch (e) { /* ignore child save errors, continue */ }
+      }
+
+      // 6) Read latest settings from IndexedDB and merge with current cfg state
+      const latest = await idbGetSettings();
+      
+      
+      // cfg에는 페르소나 정보 등 최신 상태가 들어있으므로 cfg를 우선으로 병합
+      await idbSetSettings({ ...(latest || {}), ...cfg, promptBlocks: effectiveBlocks });
       await idbSetFishModels(fishModels || []);
       setStatus('설정이 로컬에 저장되었습니다');
       pushToast('설정이 저장되었습니다','success');
       
-      // 저장 완료 후 페이지 새로고침 (탭 상태는 sessionStorage에서 복원됨)
-      setTimeout(() => {
-        window.location.reload();
-      }, 300); // 토스트 메시지가 보이도록 짧은 딜레이 후 새로고침
-    }catch(e){ setStatus('저장 실패'); pushToast('설정 저장 실패','error'); setTimeout(()=>setStatus(''),2000); }
+    }catch(e){ 
+      console.error('[SettingsPage] saveCfg - SAVE FAILED', e);
+      setStatus('저장 실패'); 
+      pushToast('설정 저장 실패','error'); 
+      setTimeout(()=>setStatus(''),2000); 
+    }
+    finally { 
+      
+      setSaving(false); 
+      try { document.body.classList.remove('saving'); } catch {} 
+    }
   }
 
   function PromptPanel(){
@@ -286,11 +367,11 @@ export default function SettingsPage(){
       <div className="flex w-full max-w-[1192px]">
         {/* 좌측 탭: 모바일에서도 표시 */}
         <aside className="w-32 md:w-48 bg-slate-800/50 border-r border-slate-700/50 p-2 md:p-6 flex flex-col gap-2">
-          <button onClick={()=>setLeftSection('prompt')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='prompt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>프롬프트</button>
-          <button onClick={()=>setLeftSection('model')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='model'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>모델</button>
-          <button onClick={()=>setLeftSection('audio')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='audio'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>오디오</button>
-          <button onClick={()=>setLeftSection('persona')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='persona'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>페르소나</button>
-          <button onClick={()=>setLeftSection('advanced')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='advanced'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>고급설정</button>
+          <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setLeftSection('prompt') }} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='prompt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>프롬프트</button>
+          <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setLeftSection('model') }} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='model'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>모델</button>
+          <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setLeftSection('audio') }} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='audio'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>오디오</button>
+          <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setLeftSection('persona') }} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='persona'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>페르소나</button>
+          <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setLeftSection('advanced') }} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='advanced'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>고급설정</button>
         </aside>
 
         <main className="flex-1 md:w-[1000px] p-0 flex flex-col items-stretch">
@@ -298,21 +379,21 @@ export default function SettingsPage(){
             <div className="flex gap-1 md:gap-2 mb-0 justify-start flex-wrap">
               {leftSection === 'audio' ? (
                 <>
-                  <button type="button" className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${audioTab==='record'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onClick={()=>setAudioTab('record')}>녹음</button>
-                  <button type="button" className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${audioTab==='play'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onClick={()=>setAudioTab('play')}>재생</button>
+                  <button type="button" className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${audioTab==='record'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setAudioTab('record') }}>녹음</button>
+                  <button type="button" className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${audioTab==='play'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setAudioTab('play') }}>재생</button>
                 </>
               ) : leftSection === 'model' ? (
                 <>
-                  <button onClick={()=>setTab('llm')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='llm'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>LLM</button>
-                  <button onClick={()=>setTab('stt')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='stt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>STT</button>
-                  <button onClick={()=>setTab('api')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='api'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>API</button>
+                  <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setTab('llm') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='llm'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>LLM</button>
+                  <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setTab('stt') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='stt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>STT</button>
+                  <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setTab('api') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='api'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>API</button>
                 </>
               ) : leftSection === 'prompt' ? (
                 <>
-                  <button onClick={()=>{ commitPromptDrafts(); setPromptRightTab('params') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='params'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>파라미터</button>
-                  <button onClick={()=>{ commitPromptDrafts(); setPromptRightTab('blocks') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='blocks'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>프롬프트 블록</button>
-                  <button onClick={()=>{ commitPromptDrafts(); setPromptRightTab('scripts') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='scripts'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>스크립트</button>
-                  <button onClick={()=>{ commitPromptDrafts(); setPromptRightTab('other') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='other'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>기타</button>
+                  <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setPromptRightTab('params') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='params'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>파라미터</button>
+                  <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setPromptRightTab('blocks') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='blocks'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>프롬프트 블록</button>
+                  <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setPromptRightTab('scripts') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='scripts'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>스크립트</button>
+                  <button onMouseDown={async()=>{ await commitAllDrafts(); }} onClick={()=>{ setPromptRightTab('other') }} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${promptRightTab==='other'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>기타</button>
                 </>
               ) : null}
             </div>
@@ -361,6 +442,7 @@ export default function SettingsPage(){
 
       {/* 뒤로가기 버튼: 모바일은 좌측 하단, 데스크톱은 좌측 상단 */}
       <button 
+        onMouseDown={async () => { try{ await commitAllDrafts(); }catch{} }}
         onClick={() => { window.location.href = '/'; }}
         className="fixed left-2 bottom-4 md:left-6 md:bottom-auto md:top-6 w-8 h-8 md:w-10 md:h-10 rounded-lg bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition-colors shadow-lg z-50"
         aria-label="뒤로가기"
@@ -373,11 +455,12 @@ export default function SettingsPage(){
 
       {/* 저장 버튼 */}
       <button 
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={()=>saveCfg()} 
+        onMouseDown={()=>saveCfg()} 
         className="fixed left-1/2 transform -translate-x-1/2 bottom-4 md:bottom-6 px-4 md:px-6 py-2 md:py-3 text-sm md:text-base bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white rounded-lg shadow-lg hover:shadow-xl transition-all font-medium z-50"
+        disabled={saving}
+        aria-busy={saving}
       >
-        저장
+        {saving ? '저장 중...' : '저장'}
       </button>
     </div>
   )

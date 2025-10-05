@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Avoid scrollbar flicker during short saving states */
+html { scrollbar-gutter: stable; }
+body.saving {
+  overflow-y: hidden;
+}
+
 :root{--accent:#14b8a6}
 html,body,#root{height:100%}
 body{@apply bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 font-sans text-slate-100}
