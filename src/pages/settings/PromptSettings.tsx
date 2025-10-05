@@ -1,7 +1,6 @@
 import React from 'react'
 import { setSettings as idbSetSettings } from '../../lib/indexeddb'
 import { pushToast } from '../../components/Toast'
-import SmartTextarea from '../../components/inputs/SmartTextarea'
 
 export type PromptBlock = {
   id: string
@@ -37,13 +36,6 @@ export default function PromptSettings(props: any){
   
   // Draft ref for prompt content to avoid re-renders on typing
   const promptDraftsRef = React.useRef<Record<string, string>>({})
-  const getLivePrompt = React.useCallback((id: string): string | undefined => {
-    try {
-      const el = document.getElementById(`prompt-${id}`) as HTMLTextAreaElement | null
-      if (el && typeof el.value === 'string') return el.value
-    } catch {}
-    return undefined
-  }, [])
   
   // track edit state to suppress autosave while typing
   const isEditingRef = React.useRef(false)
@@ -53,8 +45,6 @@ export default function PromptSettings(props: any){
       promptLocalRef.current = localBlocks
     }
   }, [localBlocks, promptLocalRef])
-
-  
 
   // Do not resync from parent after initial state; avoid overwriting user edits
 
@@ -77,32 +67,19 @@ export default function PromptSettings(props: any){
   React.useEffect(() => {
     if (promptCommitRef) {
       promptCommitRef.current = () => {
-        // Cancel any pending debounced light saves to avoid stale overwrites
-        try {
-          if (blocksSaveTimerRef.current) { window.clearTimeout(blocksSaveTimerRef.current); blocksSaveTimerRef.current = null }
-          pendingBlocksRefForSave.current = null
-        } catch {}
-        // Prompt blocks: build updated array synchronously from latest ref
-        const base = localBlocksRef.current || []
-        const updatedBlocks = base.map(block => {
-          // Prefer live DOM value (handles Save while typing before blur)
-          const el = document.getElementById(`prompt-${block.id}`) as HTMLTextAreaElement | null
-          const live = el ? el.value : undefined
-          if (typeof live === 'string' && live !== block.prompt) {
-            return { ...block, prompt: live }
-          }
-          // Fallback to draft ref
-          const draft = promptDraftsRef.current[block.id]
-          if (draft !== undefined && draft !== block.prompt) {
-            return { ...block, prompt: draft }
-          }
-          return block
+        // 1) Commit all prompt drafts from ref
+        setLocalBlocks((prev) => {
+          const updated = prev.map(block => {
+            const draft = promptDraftsRef.current[block.id]
+            if (draft !== undefined && draft !== block.prompt) {
+              return { ...block, prompt: draft }
+            }
+            return block
+          })
+          return updated
         })
-        // reflect to state and parent ref immediately
-        setLocalBlocks(updatedBlocks)
-        try { if (promptLocalRef) promptLocalRef.current = updatedBlocks } catch {}
 
-        // Scripts: commit drafts synchronously too
+        // 2) Commit all script drafts from ref and persist immediately
         try {
           const current = scriptsRef.current || []
           const updatedScripts = current.map((sc, idx) => {
@@ -117,12 +94,11 @@ export default function PromptSettings(props: any){
               out: draft.out ?? sc.out
             }
           })
+          // update state sync and save
           setScripts(updatedScripts)
-          // do not block on persistence here; caller may persist
+          // persist
           ;(async () => { try { await autoSaveScripts(updatedScripts) } catch {} })()
         } catch {}
-
-        return updatedBlocks
       }
     }
   }, [promptCommitRef])
@@ -237,7 +213,7 @@ export default function PromptSettings(props: any){
       setCfg((prev: any) => ({ ...prev, regexScripts: list }))
       const newCfg = { ...cfgRef.current, regexScripts: list }
       await idbSetSettings(newCfg)
-      
+      console.log('[PromptSettings] Saved regexScripts:', list.length)
     } catch (e) {
       console.error('[PromptSettings] Save regexScripts failed:', e)
     }
@@ -251,39 +227,11 @@ export default function PromptSettings(props: any){
       // Persist with latest cfg
       const newCfg = { ...cfgRef.current, promptBlocks: blocks }
       await idbSetSettings(newCfg)
-      
+      console.log('[PromptSettings] Auto-saved', blocks.length, 'blocks')
     } catch (e) {
       console.error('[PromptSettings] Auto-save failed:', e)
     }
   }, [setCfg, setPromptBlocks])
-
-  // Light autosave used for text commits only (no React state updates to avoid focus loss)
-  const autoSaveLight = React.useCallback(async (blocks: PromptBlock[]) => {
-    try {
-      const newCfg = { ...cfgRef.current, promptBlocks: blocks }
-      cfgRef.current = newCfg // keep ref in sync for subsequent merges
-      await idbSetSettings(newCfg)
-      
-    } catch (e) {
-      console.error('[PromptSettings] Light-save failed:', e)
-    }
-  }, [])
-
-  // Coalesced, delayed autosave for prompt blocks to avoid stealing focus right after a click
-  const blocksSaveTimerRef = React.useRef<number | null>(null)
-  const pendingBlocksRefForSave = React.useRef<PromptBlock[] | null>(null)
-  const scheduleSilentSaveBlocks = React.useCallback((blocks: PromptBlock[], delayMs: number = 250) => {
-    pendingBlocksRefForSave.current = blocks
-    if (blocksSaveTimerRef.current) { window.clearTimeout(blocksSaveTimerRef.current); blocksSaveTimerRef.current = null }
-    blocksSaveTimerRef.current = window.setTimeout(() => {
-      const latest = pendingBlocksRefForSave.current || blocks
-      pendingBlocksRefForSave.current = null
-      blocksSaveTimerRef.current = null
-      // perform light autosave (no React state updates)
-      autoSaveLight(latest)
-    }, delayMs) as any
-  }, [autoSaveLight])
-  React.useEffect(() => () => { if (blocksSaveTimerRef.current) window.clearTimeout(blocksSaveTimerRef.current) }, [])
 
   // No periodic auto-save; we save only on explicit actions (add/delete/reorder)
 
@@ -300,56 +248,26 @@ export default function PromptSettings(props: any){
   }
 
   const commitEdits = React.useCallback(() => {
-    
-    const base = localBlocksRef.current || []
-    const updated = base.map(block => {
-      const live = getLivePrompt(block.id)
-      if (typeof live === 'string' && live !== block.prompt) {
-        
-        return { ...block, prompt: live }
-      }
-      const draft = promptDraftsRef.current[block.id]
-      if (draft !== undefined && draft !== block.prompt) {
-        
-        return { ...block, prompt: draft }
-      }
-      return block
+    // First, commit all prompt drafts from ref
+    setLocalBlocks((prev) => {
+      const updated = prev.map(block => {
+        const draft = promptDraftsRef.current[block.id]
+        if (draft !== undefined && draft !== block.prompt) {
+          return { ...block, prompt: draft }
+        }
+        return block
+      })
+      return updated
     })
-
-    // Avoid re-renders if no actual changes were made
-    if (JSON.stringify(base) === JSON.stringify(updated)) {
-      
-      isEditingRef.current = false;
-      return;
-    }
     
-    
-    // Update both local and parent state to keep them in sync
-    setLocalBlocks(updated);
-    setPromptBlocks(updated); // <-- THE FIX: Propagate state up to the parent
-    try { if (promptLocalRef) promptLocalRef.current = updated } catch {}
-    isEditingRef.current = false
-    // Schedule a silent save to persist the changes
-    scheduleSilentSaveBlocks(updated, 250)
-  }, [promptLocalRef, scheduleSilentSaveBlocks, getLivePrompt, setPromptBlocks])
-
-  const commitOneBlock = React.useCallback((id: string) => {
-    const base = localBlocksRef.current || []
-    let changed = false
-    const updated = base.map(block => {
-      if (block.id !== id) return block
-      const live = getLivePrompt(id)
-      if (typeof live === 'string' && live !== block.prompt) { changed = true; return { ...block, prompt: live } }
-      const draft = promptDraftsRef.current[id]
-      if (draft !== undefined && draft !== block.prompt) { changed = true; return { ...block, prompt: draft } }
-      return block
-    })
-    if (changed) {
-      setLocalBlocks(updated)
-      try { if (promptLocalRef) promptLocalRef.current = updated } catch {}
-      scheduleSilentSaveBlocks(updated, 250)
-    }
-  }, [promptLocalRef, scheduleSilentSaveBlocks, getLivePrompt])
+    // Then save after a brief delay to ensure state is updated
+    setTimeout(() => {
+      const blocks = localBlocksRef.current
+      if (!blocks) return
+      isEditingRef.current = false
+      autoSave(blocks)
+    }, 0)
+  }, [autoSave])
 
   const removeBlockSmart = (id: string, index: number) => {
     setLocalBlocks((prev) => {
@@ -397,8 +315,7 @@ export default function PromptSettings(props: any){
             <button
               type="button"
               className="w-10 h-10 grid place-items-center bg-green-500 text-white rounded font-bold text-xl hover:bg-green-600 leading-none"
-              onMouseDown={() => { commitEdits(); }}
-              onClick={() => { addBlock() }}
+              onClick={addBlock}
               aria-label="블록 추가"
             >
               +
@@ -422,8 +339,6 @@ export default function PromptSettings(props: any){
                 }}
                 onDrop={(e) => {
                   e.preventDefault()
-                  // ensure drafts are committed before reorder
-                  if (isEditingRef.current) commitEdits()
                   const from = dragIndexRef.current
                   const to = i
                   if (from == null) return
@@ -441,8 +356,11 @@ export default function PromptSettings(props: any){
               >
                 <div
                   className="flex items-center justify-between px-3 py-2 cursor-pointer"
-                  onMouseDown={() => { 
-                    commitEdits(); 
+                  onMouseDown={(e) => {
+                    // Commit edits before the click changes focus/selection
+                    if (isEditingRef.current) commitEdits()
+                  }}
+                  onClick={() => {
                     setExpandedBlocks((x: any) => ({ ...x, [b.id]: !x[b.id] }))
                   }}
                 >
@@ -454,11 +372,9 @@ export default function PromptSettings(props: any){
                     <button
                       type="button"
                       className="w-8 h-8 grid place-items-center bg-red-500 text-white rounded hover:bg-red-600 font-bold text-lg leading-none"
-                      onMouseDown={(e)=>{ e.stopPropagation(); commitEdits(); }}
                       onClick={(e) => {
                         e.stopPropagation()
                         e.preventDefault()
-                        // commit drafts first to avoid loss
                         removeBlockSmart(b.id, i)
                       }}
                       aria-label="블록 삭제"
@@ -470,7 +386,6 @@ export default function PromptSettings(props: any){
                       draggable
                       onDragStart={(e) => {
                         e.stopPropagation();
-                        commitEdits(); // Commit before starting drag
                         dragIndexRef.current = i;
                         e.dataTransfer!.effectAllowed = 'move';
                       }}
@@ -612,27 +527,17 @@ export default function PromptSettings(props: any){
                         ) : (
                           <>
                             <label className="block text-xs text-slate-300" htmlFor={`prompt-${b.id}`}>프롬프트 내용</label>
-                            <SmartTextarea
+                            <textarea
                               id={`prompt-${b.id}`}
                               name={`prompt-${b.id}`}
-                              value={b.prompt || ''}
-                              debugLabel={`prompt-${b.id}`}
-                              onCommit={(val) => {
-                                // 드래프트만 업데이트하고, 리스트 상태(setLocalBlocks)는 건드리지 않음(포커스 유지를 위해)
-                                
-                                promptDraftsRef.current[b.id] = val
-                                const base = localBlocksRef.current || []
-                                const merged = base.map(x => x.id===b.id ? { ...x, prompt: val } : x)
-                                // UI도 최신 내용을 반영하기 위해, 블러 이후 틱에 로컬 상태를 갱신 (포커스 안전)
-                                setTimeout(() => {
-                                  setLocalBlocks(merged)
-                                  try { if (promptLocalRef) promptLocalRef.current = merged } catch {}
-                                }, 0)
-                                
-                                scheduleSilentSaveBlocks(merged, 250)
-                              }}
                               className="w-full rounded border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 placeholder-slate-500 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50"
                               rows={6}
+                              defaultValue={b.prompt}
+                              onChange={(e) => {
+                                // Update ref only, no state change
+                                promptDraftsRef.current[b.id] = e.target.value
+                              }}
+                              draggable={false}
                             />
                           </>
                         )}

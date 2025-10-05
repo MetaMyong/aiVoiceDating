@@ -27,11 +27,8 @@ export async function dbSet(key: string, value: any) {
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('kv', 'readwrite');
     const store = tx.objectStore('kv');
-    // Resolve only after the transaction is fully committed to avoid rollbacks on rapid navigation/reload
-    tx.oncomplete = () => resolve();
-    tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
-    tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction error'));
     const r = store.put(value, key);
+    r.onsuccess = () => resolve();
     r.onerror = () => reject(r.error);
   });
 }

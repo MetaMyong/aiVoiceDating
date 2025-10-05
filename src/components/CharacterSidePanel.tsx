@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef, useCallback } from 'react'
 import { getChatRooms, setChatRooms, getActiveChatRoom, setActiveChatRoom, getRoomAuthorNotes, setRoomAuthorNotes } from '../lib/indexeddb'
 import { IconTrash, IconCog, IconNote } from './Icons'
-import SmartInput from './inputs/SmartInput'
-import SmartTextarea from './inputs/SmartTextarea'
 
 type RegexScript = {
   id?: string
@@ -33,7 +31,84 @@ type RoomDraft = {
   name: string
 }
 
-// Using SmartInput/SmartTextarea for all editable fields
+// Separate components to prevent re-render on parent state change
+const LoreInput = React.memo(({ 
+  id, 
+  value, 
+  placeholder, 
+  onChange, 
+  onBlur,
+  className,
+  isTextarea = false,
+  inputMode
+}: { 
+  id: string
+  value: string
+  placeholder?: string
+  onChange: (value: string) => void
+  onBlur?: () => void
+  className?: string
+  isTextarea?: boolean
+  inputMode?: string
+}) => {
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
+  const isComposingRef = useRef(false)
+  
+  // Only update DOM value when prop changes externally (not from our own onChange)
+  useEffect(() => {
+    if (inputRef.current && document.activeElement !== inputRef.current) {
+      inputRef.current.value = value
+    }
+  }, [value, id])
+  
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (!isComposingRef.current) {
+      onChange(e.target.value)
+    }
+  }
+  
+  const handleCompositionStart = () => {
+    isComposingRef.current = true
+  }
+  
+  const handleCompositionEnd = (e: React.CompositionEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    isComposingRef.current = false
+    onChange((e.target as HTMLInputElement | HTMLTextAreaElement).value)
+  }
+  
+  if (isTextarea) {
+    return (
+      <textarea
+        ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+        id={id}
+        className={className}
+        placeholder={placeholder}
+        defaultValue={value}
+        onChange={handleChange}
+        onBlur={onBlur}
+        onCompositionStart={handleCompositionStart}
+        onCompositionEnd={handleCompositionEnd}
+      />
+    )
+  }
+  
+  return (
+    <input
+      ref={inputRef as React.RefObject<HTMLInputElement>}
+      id={id}
+      className={className}
+      placeholder={placeholder}
+      defaultValue={value}
+      onChange={handleChange}
+      onBlur={onBlur}
+      inputMode={inputMode as any}
+      onCompositionStart={handleCompositionStart}
+      onCompositionEnd={handleCompositionEnd}
+    />
+  )
+})
+
+LoreInput.displayName = 'LoreInput'
 
 type Props = {
   open: boolean
@@ -46,7 +121,6 @@ type Props = {
 // (debug component removed)
 
 const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, onChange }: Props) => {
-  const dbg = (...args: any[]) => { try { if (typeof window !== 'undefined' && (window as any).__CSP_DEBUG) { console.log('[CSP]', ...args) } } catch {} }
   const [rooms, setRooms] = useState<Array<{ id: string, name: string }>>([])
   const [activeRoomId, setActiveRoomIdLocal] = useState<string>('default')
   const [leftOffset, setLeftOffset] = useState<number>(0)
@@ -116,18 +190,21 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   
   const cardDraftHandlers = cardDraftHandlersRef.current
   
-  // Commit card drafts on blur: no-op to avoid re-render on blur (state sync happens on Save)
-  const commitCardDraft = useCallback((_field: 'name' | 'desc' | 'globalOverride') => {
-    // intentionally no setState here
+  // Commit card drafts to actual state on blur
+  const commitCardDraft = useCallback((field: 'name' | 'desc' | 'globalOverride') => {
+    if (field === 'name') setCardName(cardDraftsRef.current.name)
+    else if (field === 'desc') setCardDesc(cardDraftsRef.current.desc)
+    else if (field === 'globalOverride') setGlobalOverride(cardDraftsRef.current.globalOverride)
   }, [])
 
   // Author notes (per-room). Keep a separate draft to mirror existing pattern
   const authorNotesDraftRef = useRef<string>('')
   const commitAuthorNotesDraft = useCallback(async () => {
     const text = authorNotesDraftRef.current
+    setAuthorNotes(text)
     const rid = activeRoomId || 'default'
-    // Persist quietly without triggering re-render to avoid first-click loss
-    ;(async () => { try { await setRoomAuthorNotes(rid, text) } catch {} })()
+    try { await setRoomAuthorNotes(rid, text) } catch {}
+    // Notify others (e.g., Chat) that author notes changed
     try {
       const evt = new CustomEvent('authorNotesChanged', { detail: { roomId: rid, notes: text } })
       window.dispatchEvent(evt)
@@ -225,56 +302,55 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     })
   }, [])
 
-  // Commit lore draft on blur: no-op to avoid re-render; Save merges drafts
-  const commitLoreDraft = useCallback((_key: string, _index: number) => {
-    // intentionally no setState here
-  }, [])
-
-  const commitRoomDraft = useCallback((_roomId: string) => {
-    // intentionally no setState here; Save will persist room names
-  }, [])
-
-  const commitScriptDraft = useCallback((_key: string, _index: number) => {
-    // intentionally no setState here; Save merges drafts
-  }, [])
-
-  // Capture currently active input/textarea value into draft refs (before blur)
-  const captureActiveElementDraft = useCallback(() => {
-    try {
-      const ae = document.activeElement as any
-      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) {
-        const id = String(ae.id || '')
-        const val = String(ae.value ?? '')
-        try { const w:any = window as any; if (w && w.__CSP_DEBUG) { console.log('[CSP] captureActiveElementDraft', { id, len: (val||'').length }) } } catch {}
-        if (id) {
-          if (id === 'card-name' || id === 'm-card-name') {
-            cardDraftsRef.current.name = val
-          } else if (id === 'card-desc' || id === 'm-card-desc') {
-            cardDraftsRef.current.desc = val
-          } else if (id === 'card-global-override' || id === 'm-card-go') {
-            cardDraftsRef.current.globalOverride = val
-          } else if (id === 'card-author-notes' || id === 'm-author-notes') {
-            authorNotesDraftRef.current = val
-          } else if (id.startsWith('room-name-') || id.startsWith('m-room-name-')) {
-            const rid = id.replace(/^m?-?room-name-/, '')
-            if (!roomDraftsRef.current[rid]) roomDraftsRef.current[rid] = { name: '' }
-            roomDraftsRef.current[rid].name = val
-          } else if (/^lore-(name|order|keys|content)-/.test(id)) {
-            const match = id.match(/^lore-(name|order|keys|content)-/)
-            const field = match && match[1]
-            const key = id.replace(/^lore-(name|order|keys|content)-/, '')
-            if (!loreDraftsRef.current[key]) loreDraftsRef.current[key] = { name: '', order: '', keys: '', content: '' }
-            if (field) (loreDraftsRef.current[key] as any)[field] = val
-          } else if (/^script-(name|in|flags|out)-/.test(id)) {
-            const match = id.match(/^script-(name|in|flags|out)-/)
-            const field = match && match[1]
-            const key = id.replace(/^script-(name|in|flags|out)-/, '')
-            if (!scriptDraftsRef.current[key]) scriptDraftsRef.current[key] = { name: '', in: '', flags: 'g', out: '' }
-            if (field) (scriptDraftsRef.current[key] as any)[field] = val
-          }
-        }
+  // Commit draft to actual state
+  const commitLoreDraft = useCallback((key: string, index: number) => {
+    const draft = loreDraftsRef.current[key]
+    if (!draft) return
+    
+    setLoreEntries(prev => {
+      if (!Array.isArray(prev) || index < 0 || index >= prev.length) return prev
+      const current = prev[index] ?? {}
+      const clone = prev.slice()
+      clone[index] = {
+        ...current,
+        name: draft.name,
+        _io: draft.order,
+        keys: draft.keys.split(',').map((s: string) => s.trim()).filter(Boolean),
+        content: draft.content
       }
-    } catch {}
+      return clone
+    })
+  }, [])
+
+  const commitRoomDraft = useCallback((roomId: string) => {
+    const draft = roomDraftsRef.current[roomId]
+    if (!draft) return
+    
+    setRooms(prev => {
+      const updated = prev.map(r => r.id === roomId ? { ...r, name: draft.name } : r)
+      // Save to IndexedDB
+      setChatRooms(personaIndex, updated).catch(err => console.error('Failed to save room name:', err))
+      return updated
+    })
+  }, [personaIndex])
+
+  const commitScriptDraft = useCallback((key: string, index: number) => {
+    const draft = scriptDraftsRef.current[key]
+    if (!draft) return
+    
+    setScripts(prev => {
+      if (!Array.isArray(prev) || index < 0 || index >= prev.length) return prev
+      const current = prev[index] ?? {} as RegexScript
+      const clone = prev.slice()
+      clone[index] = {
+        ...current,
+        name: draft.name,
+        in: draft.in,
+        flags: draft.flags,
+        out: draft.out
+      }
+      return clone
+    })
   }, [])
 
   // Use ref for lore/script draft handlers to avoid re-creating
@@ -452,23 +528,6 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
     }
   }, [])
 
-  // While the editor is open, capture active input draft on any mousedown to avoid losing pre-blur keystrokes
-  useEffect(() => {
-    if (!open) return
-    const onAnyMouseDown = (e: MouseEvent) => {
-      try {
-        const t = e.target as HTMLElement
-        const ae = document.activeElement as HTMLElement | null
-        dbg('mousedown(capture)', { target: t?.tagName, targetId: (t as any)?.id, activeBefore: ae?.tagName, activeId: (ae as any)?.id })
-      } catch {}
-      captureActiveElementDraft()
-    }
-    window.addEventListener('mousedown', onAnyMouseDown, true) // capture phase
-    return () => {
-      window.removeEventListener('mousedown', onAnyMouseDown, true)
-    }
-  }, [open, captureActiveElementDraft])
-
   function emitRoomChange(roomId: string){
     // Save active
     setActiveChatRoom(personaIndex, roomId)
@@ -506,30 +565,22 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
   }
 
   const saveAll = () => {
-    try { const w:any = window as any; if (w && w.__CSP_DEBUG) { console.log('[CSP] saveAll:start') } } catch {}
-    // 0) Capture active element's value (pre-blur) just like Settings
-    captureActiveElementDraft()
-
     // 1) 최종 카드 텍스트 값은 draft refs에서 직접 읽어 최신값 보장
     const finalCardName = cardDraftsRef.current.name
     const finalCardDesc = cardDraftsRef.current.desc
     const finalGlobalOverride = cardDraftsRef.current.globalOverride
 
-    // UI 상태 업데이트는 저장 직후 한 번만(지연) 적용
-    setTimeout(() => {
-      setCardName(finalCardName)
-      setCardDesc(finalCardDesc)
-      setGlobalOverride(finalGlobalOverride)
-      try { const w:any = window as any; if (w && w.__CSP_DEBUG) { console.log('[CSP] saveAll:syncUI', { finalCardNameLen: (finalCardName||'').length, finalCardDescLen: (finalCardDesc||'').length }) } } catch {}
-    }, 0)
+    // UI 상태도 업데이트(시각적 동기화용)
+    setCardName(finalCardName)
+    setCardDesc(finalCardDesc)
+    setGlobalOverride(finalGlobalOverride)
 
-    // 2) 채팅방: draft를 이용해 최종 목록 구성 후 일괄 저장
-    const finalRooms = rooms.map((room) => {
-      const draft = roomDraftsRef.current[room.id]
-      return draft ? { ...room, name: draft.name } : room
+    // 2) 채팅방 이름 초안 커밋(별도 저장 영역이라 즉시 반영 필요)
+    rooms.forEach((room) => {
+      const roomId = room.id
+      const draft = roomDraftsRef.current[roomId]
+      if (draft) commitRoomDraft(roomId)
     })
-    // 비동기로 저장, UI는 다음 tick에 반영됨
-    try { setChatRooms(personaIndex, finalRooms).catch(()=>{}) } catch {}
 
     // 3) 로어/스크립트는 setState 타이밍을 기다리지 않고 draft refs와 현재 state를 병합해 최종 데이터 구성
     const finalLoreEntries = loreEntries.map((entry, idx) => {
@@ -608,13 +659,12 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
       }
     }
 
-    
+    console.log('[CharacterSidePanel] Saving characterTTS:', characterTTSConfig)
+    console.log('[CharacterSidePanel] Final lore entries count:', finalLoreEntries.length)
+    console.log('[CharacterSidePanel] Final scripts count:', finalScripts.length)
     // Save current author notes draft for this room
     try { setRoomAuthorNotes(activeRoomId || 'default', authorNotesDraftRef.current ?? authorNotes) } catch {}
     onChange(next)
-    // rooms UI도 동기화 (지연 적용)
-    setTimeout(() => { setRooms(finalRooms) }, 0)
-    try { const w:any = window as any; if (w && w.__CSP_DEBUG) { console.log('[CSP] saveAll:end') } } catch {}
   }
 
   // UI helpers
@@ -688,13 +738,12 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                 return (
                   <div key={r.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${activeRoomId===r.id? 'border-teal-500/60 bg-slate-800/60':'border-slate-700/50 bg-slate-900/40'}`}>
                     <label htmlFor={`room-name-${r.id}`} className="sr-only">채팅방 이름</label>
-                    <SmartInput
+                    <LoreInput
                       id={`room-name-${r.id}`}
-                      name={`room-name-${r.id}`}
                       className="flex-1 bg-transparent outline-none text-slate-100"
                       value={draft.name}
-                      onDraftChange={roomDraftHandlers[r.id]?.name}
-                      onCommit={() => commitRoomDraft(r.id)}
+                      onChange={roomDraftHandlers[r.id]?.name}
+                      onBlur={() => commitRoomDraft(r.id)}
                     />
                     <button onClick={()=>emitRoomChange(r.id)} className={`p-1.5 rounded ${activeRoomId===r.id? 'bg-teal-600 text-white':'bg-slate-700/70 text-slate-200 hover:bg-slate-600/70'}`} title="활성화">
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -719,48 +768,47 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
             <div className="text-xs font-bold text-slate-300 flex items-center gap-2"><IconNote className="w-4 h-4 text-cyan-400" /> 캐릭터카드 정보</div>
             <div>
               <label htmlFor="card-name" className="block text-xs text-slate-400 mb-1">이름 {'{{char}}'}</label>
-              <SmartInput
+              <LoreInput
                 id="card-name"
-                name="card-name"
                 className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2"
-                value={cardDraftsRef.current.name ?? cardName}
-                onDraftChange={cardDraftHandlers.name}
-                onCommit={() => commitCardDraft('name')}
+                value={cardName}
+                onChange={cardDraftHandlers.name}
+                onBlur={() => commitCardDraft('name')}
               />
             </div>
             <div>
               <label htmlFor="card-desc" className="block text-xs text-slate-400 mb-1">설명 {'{{char_description}}'}</label>
-              <SmartTextarea
+              <LoreInput
                 id="card-desc"
-                name="card-desc"
                 className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[160px]"
-                value={cardDraftsRef.current.desc ?? cardDesc}
-                onDraftChange={cardDraftHandlers.desc}
-                onCommit={() => commitCardDraft('desc')}
+                value={cardDesc}
+                onChange={cardDraftHandlers.desc}
+                onBlur={() => commitCardDraft('desc')}
+                isTextarea
               />
             </div>
             <div>
               <label htmlFor="card-global-override" className="block text-xs text-slate-400 mb-1">글로벌 노트 덮어쓰기</label>
-              <SmartTextarea
+              <LoreInput
                 id="card-global-override"
-                name="card-global-override"
                 className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]"
-                value={cardDraftsRef.current.globalOverride ?? globalOverride}
-                onDraftChange={cardDraftHandlers.globalOverride}
-                onCommit={() => commitCardDraft('globalOverride')}
+                value={globalOverride}
+                onChange={cardDraftHandlers.globalOverride}
+                onBlur={() => commitCardDraft('globalOverride')}
+                isTextarea
               />
             </div>
 
             {/* Author Notes (session scoped per room) */}
             <div>
               <label htmlFor="card-author-notes" className="block text-xs text-slate-400 mb-1">작가의 노트</label>
-              <SmartTextarea
+              <LoreInput
                 id="card-author-notes"
-                name="card-author-notes"
                 className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]"
-                value={authorNotesDraftRef.current ?? authorNotes}
-                onDraftChange={(v)=>{ authorNotesDraftRef.current = v; try { const evt = new CustomEvent('authorNotesChanged', { detail: { roomId: activeRoomId || 'default', notes: v } }); window.dispatchEvent(evt) } catch {} }}
-                onCommit={commitAuthorNotesDraft}
+                value={authorNotes}
+                onChange={(v)=>{ authorNotesDraftRef.current = v; /* optional live dispatch */ try { const evt = new CustomEvent('authorNotesChanged', { detail: { roomId: activeRoomId || 'default', notes: v } }); window.dispatchEvent(evt) } catch {} }}
+                onBlur={commitAuthorNotesDraft}
+                isTextarea
               />
             </div>
             
@@ -900,36 +948,36 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                       <div className="px-3 py-3 space-y-2">
                           <div className="flex gap-2">
                             <label htmlFor={`lore-name-${entry._lid||originalIndex}`} className="sr-only">로어 이름</label>
-                            <SmartInput
-                              id={`lore-name-${entry._lid||originalIndex}`}
-                              name={`lore-name-${entry._lid||originalIndex}`}
-                              className="flex-1 rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1"
-                              placeholder="이름"
+                            <LoreInput
+                              id={`lore-name-${entry._lid||originalIndex}`} 
+                              className="flex-1 rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1" 
+                              placeholder="이름" 
                               value={draft.name}
-                              onDraftChange={loreDraftHandlers[entryKey]?.name}
-                              onCommit={() => commitLoreDraft(entryKey, originalIndex)}
+                              onChange={loreDraftHandlers[entryKey]?.name}
+                              onBlur={() => {
+                                console.log('[Draft onBlur] lore-name', entryKey)
+                                commitLoreDraft(entryKey, originalIndex)
+                              }}
                             />
                             <label htmlFor={`lore-order-${entry._lid||originalIndex}`} className="sr-only">배치</label>
-                            <SmartInput
-                              id={`lore-order-${entry._lid||originalIndex}`}
-                              name={`lore-order-${entry._lid||originalIndex}`}
-                              className="w-24 rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1"
-                              placeholder="배치"
-                              inputMode="numeric"
+                            <LoreInput
+                              id={`lore-order-${entry._lid||originalIndex}`} 
+                              className="w-24 rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1" 
+                              placeholder="배치" 
+                              inputMode="numeric" 
                               value={draft.order}
-                              onDraftChange={loreDraftHandlers[entryKey]?.order}
-                              onCommit={() => commitLoreDraft(entryKey, originalIndex)}
+                              onChange={loreDraftHandlers[entryKey]?.order}
+                              onBlur={() => commitLoreDraft(entryKey, originalIndex)}
                             />
                           </div>
                           <label htmlFor={`lore-keys-${entry._lid||originalIndex}`} className="sr-only">활성화 키</label>
-                          <SmartInput
-                            id={`lore-keys-${entry._lid||originalIndex}`}
-                            name={`lore-keys-${entry._lid||originalIndex}`}
-                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1"
-                            placeholder="활성화 키 (쉼표로 구분)"
+                          <LoreInput
+                            id={`lore-keys-${entry._lid||originalIndex}`} 
+                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1" 
+                            placeholder="활성화 키 (쉼표로 구분)" 
                             value={draft.keys}
-                            onDraftChange={loreDraftHandlers[entryKey]?.keys}
-                            onCommit={() => commitLoreDraft(entryKey, originalIndex)}
+                            onChange={loreDraftHandlers[entryKey]?.keys}
+                            onBlur={() => commitLoreDraft(entryKey, originalIndex)}
                           />
                       <div className="flex items-center gap-3 text-xs text-slate-300">
                         <label htmlFor={`lore-selective-${entry._lid||originalIndex}`} className="flex items-center gap-1"><input id={`lore-selective-${entry._lid||originalIndex}`} name={`lore-selective-${entry._lid||originalIndex}`} type="checkbox" checked={!!entry.selective} onChange={e=>patchLoreEntry(originalIndex, { selective: e.target.checked })} /> 멀티키(모두 충족)</label>
@@ -937,14 +985,14 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                         <label htmlFor={`lore-useregex-${entry._lid||originalIndex}`} className="flex items-center gap-1"><input id={`lore-useregex-${entry._lid||originalIndex}`} name={`lore-useregex-${entry._lid||originalIndex}`} type="checkbox" checked={!!entry.use_regex} onChange={e=>patchLoreEntry(originalIndex, { use_regex: e.target.checked })} /> 정규식</label>
                       </div>
                           <label htmlFor={`lore-content-${entry._lid||originalIndex}`} className="sr-only">내용</label>
-                          <SmartTextarea
-                            id={`lore-content-${entry._lid||originalIndex}`}
-                            name={`lore-content-${entry._lid||originalIndex}`}
-                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1 min-h-[120px]"
-                            placeholder="content"
+                          <LoreInput
+                            id={`lore-content-${entry._lid||originalIndex}`} 
+                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1 min-h-[120px]" 
+                            placeholder="content" 
                             value={draft.content}
-                            onDraftChange={loreDraftHandlers[entryKey]?.content}
-                            onCommit={() => commitLoreDraft(entryKey, originalIndex)}
+                            onChange={loreDraftHandlers[entryKey]?.content}
+                            onBlur={() => commitLoreDraft(entryKey, originalIndex)}
+                            isTextarea
                           />
                           <div className="flex justify-end"><button className="text-red-400 text-sm" onClick={()=>removeLoreEntry(originalIndex, entryKey)}>삭제</button></div>
                       </div>
@@ -991,14 +1039,13 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                       <div className="px-3 py-3 space-y-2">
                           <div className="grid grid-cols-2 gap-2">
                             <label htmlFor={`script-name-${sc.id||idx}`} className="sr-only">스크립트 이름</label>
-                            <SmartInput
-                              id={`script-name-${sc.id||idx}`}
-                              name={`script-name-${sc.id||idx}`}
-                              className="rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1"
-                              placeholder="이름"
+                            <LoreInput
+                              id={`script-name-${sc.id||idx}`} 
+                              className="rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1" 
+                              placeholder="이름" 
                               value={draft.name}
-                              onDraftChange={scriptDraftHandlers[scriptKey]?.name}
-                              onCommit={() => commitScriptDraft(scriptKey, idx)}
+                              onChange={scriptDraftHandlers[scriptKey]?.name}
+                              onBlur={() => commitScriptDraft(scriptKey, idx)}
                             />
                             <label htmlFor={`script-type-${sc.id||idx}`} className="sr-only">스크립트 타입</label>
                             <select 
@@ -1015,34 +1062,32 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                             </select>
                           </div>
                           <label htmlFor={`script-in-${sc.id||idx}`} className="sr-only">정규식 IN</label>
-                          <SmartInput
-                            id={`script-in-${sc.id||idx}`}
-                            name={`script-in-${sc.id||idx}`}
-                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1"
-                            placeholder="IN (정규식)"
+                          <LoreInput
+                            id={`script-in-${sc.id||idx}`} 
+                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1" 
+                            placeholder="IN (정규식)" 
                             value={draft.in}
-                            onDraftChange={scriptDraftHandlers[scriptKey]?.in}
-                            onCommit={() => commitScriptDraft(scriptKey, idx)}
+                            onChange={scriptDraftHandlers[scriptKey]?.in}
+                            onBlur={() => commitScriptDraft(scriptKey, idx)}
                           />
                           <label htmlFor={`script-flags-${sc.id||idx}`} className="sr-only">플래그</label>
-                          <SmartInput
-                            id={`script-flags-${sc.id||idx}`}
-                            name={`script-flags-${sc.id||idx}`}
-                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1"
-                            placeholder="플래그 (예: gmi)"
+                          <LoreInput
+                            id={`script-flags-${sc.id||idx}`} 
+                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1" 
+                            placeholder="플래그 (예: gmi)" 
                             value={draft.flags}
-                            onDraftChange={scriptDraftHandlers[scriptKey]?.flags}
-                            onCommit={() => commitScriptDraft(scriptKey, idx)}
+                            onChange={scriptDraftHandlers[scriptKey]?.flags}
+                            onBlur={() => commitScriptDraft(scriptKey, idx)}
                           />
                           <label htmlFor={`script-out-${sc.id||idx}`} className="sr-only">OUT 템플릿</label>
-                          <SmartTextarea
-                            id={`script-out-${sc.id||idx}`}
-                            name={`script-out-${sc.id||idx}`}
-                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1 min-h-[100px]"
-                            placeholder="OUT ($1, $2, $& 사용 가능)"
+                          <LoreInput
+                            id={`script-out-${sc.id||idx}`} 
+                            className="w-full rounded bg-slate-800/60 border border-slate-700/50 px-2 py-1 min-h-[100px]" 
+                            placeholder="OUT ($1, $2, $& 사용 가능)" 
                             value={draft.out}
-                            onDraftChange={scriptDraftHandlers[scriptKey]?.out}
-                            onCommit={() => commitScriptDraft(scriptKey, idx)}
+                            onChange={scriptDraftHandlers[scriptKey]?.out}
+                            onBlur={() => commitScriptDraft(scriptKey, idx)}
+                            isTextarea
                           />
                           <div className="flex items-center justify-between">
                             <label htmlFor={`script-enabled-${sc.id||idx}`} className="text-xs text-slate-300 flex items-center gap-2">
@@ -1082,7 +1127,7 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
                   return (
                     <div key={r.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${activeRoomId===r.id? 'border-teal-500/60 bg-slate-800/60':'border-slate-700/50 bg-slate-900/40'}`}>
                       <label htmlFor={`m-room-name-${r.id}`} className="sr-only">채팅방 이름</label>
-                      <SmartInput id={`m-room-name-${r.id}`} name={`m-room-name-${r.id}`} className="flex-1 bg-transparent outline-none text-slate-100" value={draft.name} onDraftChange={roomDraftHandlers[r.id]?.name} onCommit={()=>commitRoomDraft(r.id)} />
+                      <LoreInput id={`m-room-name-${r.id}`} className="flex-1 bg-transparent outline-none text-slate-100" value={draft.name} onChange={roomDraftHandlers[r.id]?.name} onBlur={()=>commitRoomDraft(r.id)} />
                       <button onClick={()=>emitRoomChange(r.id)} className={`p-1.5 rounded ${activeRoomId===r.id? 'bg-teal-600 text-white':'bg-slate-700/70 text-slate-200 hover:bg-slate-600/70'}`} title="활성화">
                         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v10"/><path d="M6.5 11a5.5 5.5 0 1 0 11 0"/></svg>
                       </button>
@@ -1100,19 +1145,19 @@ const CharacterSidePanel = React.memo(({ open, onClose, personaIndex, persona, o
               <div className="text-sm font-bold text-slate-300 text-center">카드</div>
               <div>
                 <label htmlFor="m-card-name" className="block text-xs text-slate-400 mb-1">이름 {'{{char}}'}</label>
-                <SmartInput id="m-card-name" name="m-card-name" value={cardDraftsRef.current.name ?? cardName} onCommit={(v)=>{ cardDraftHandlers.name(v); commitCardDraft('name') }} className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2" />
+                <LoreInput id="m-card-name" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2" value={cardName} onChange={cardDraftHandlers.name} onBlur={()=>commitCardDraft('name')} />
               </div>
               <div>
                 <label htmlFor="m-card-desc" className="block text-xs text-slate-400 mb-1">설명 {'{{char_description}}'}</label>
-                <SmartTextarea id="m-card-desc" name="m-card-desc" value={cardDraftsRef.current.desc ?? cardDesc} onCommit={(v)=>{ cardDraftHandlers.desc(v); commitCardDraft('desc') }} className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[160px]" />
+                <LoreInput id="m-card-desc" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[160px]" value={cardDesc} onChange={cardDraftHandlers.desc} onBlur={()=>commitCardDraft('desc')} isTextarea />
               </div>
               <div>
                 <label htmlFor="m-card-go" className="block text-xs text-slate-400 mb-1">글로벌 노트 덮어쓰기</label>
-                <SmartTextarea id="m-card-go" name="m-card-go" value={cardDraftsRef.current.globalOverride ?? globalOverride} onCommit={(v)=>{ cardDraftHandlers.globalOverride(v); commitCardDraft('globalOverride') }} className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]" />
+                <LoreInput id="m-card-go" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]" value={globalOverride} onChange={cardDraftHandlers.globalOverride} onBlur={()=>commitCardDraft('globalOverride')} isTextarea />
               </div>
               <div>
                 <label htmlFor="m-author-notes" className="block text-xs text-slate-400 mb-1">작가의 노트</label>
-                <SmartTextarea id="m-author-notes" name="m-author-notes" value={authorNotesDraftRef.current ?? authorNotes} onCommit={async (v)=>{ authorNotesDraftRef.current = v; try { const evt = new CustomEvent('authorNotesChanged', { detail: { roomId: activeRoomId || 'default', notes: v } }); window.dispatchEvent(evt) } catch {}; await commitAuthorNotesDraft() }} className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]" />
+                <LoreInput id="m-author-notes" className="w-full rounded-lg border-2 border-slate-700/50 bg-slate-800/60 text-slate-100 px-3 py-2 min-h-[120px]" value={authorNotes} onChange={(v)=>{ authorNotesDraftRef.current = v; try { const evt = new CustomEvent('authorNotesChanged', { detail: { roomId: activeRoomId || 'default', notes: v } }); window.dispatchEvent(evt) } catch {} }} onBlur={commitAuthorNotesDraft} isTextarea />
               </div>
               {/* 캐릭터 TTS (모바일) */}
               <div className="space-y-2 bg-slate-800/30 p-3 rounded-lg border border-slate-700/50">
