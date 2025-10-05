@@ -258,7 +258,7 @@ export default function Chat(){
     })();
   }, []);
 
-  // Reload character TTS when character card is updated
+  // Reload character TTS when character card is updated or selection changes
   useEffect(() => {
     const reloadFromCard = async () => {
       try {
@@ -333,8 +333,10 @@ export default function Chat(){
     };
     
     window.addEventListener('characterCardsUpdate', reloadFromCard as any);
+    window.addEventListener('characterSelectionChanged', reloadFromCard as any);
     return () => {
       window.removeEventListener('characterCardsUpdate', reloadFromCard as any);
+      window.removeEventListener('characterSelectionChanged', reloadFromCard as any);
     };
   }, []);
 

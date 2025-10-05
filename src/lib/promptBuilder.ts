@@ -121,7 +121,7 @@ export async function buildPromptMessages(blocks: PromptBlock[], conversationHis
           if (!list.length) return false;
           return requireAll ? list.every(k => ctx.includes(k)) : list.some(k => ctx.includes(k));
         };
-        // Ignore any regex flags on lorebook; matching is plain substring
+        // Ignore any rege flags on lorebook; matching is plain substring
 
         // Filter out disabled/folder entries and non-string contents
         const cleaned = entries

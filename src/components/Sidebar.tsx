@@ -1,5 +1,5 @@
 import React from 'react'
-import { getSettings, setSettings } from '../lib/indexeddb'
+import { getSettings, setSettings, getActiveChatRoom } from '../lib/indexeddb'
 import JSZip from 'jszip'
 
 export default function Sidebar({ onCardSelect, className }: { onCardSelect?: () => void; className?: string } = {}) {
@@ -64,6 +64,13 @@ export default function Sidebar({ onCardSelect, className }: { onCardSelect?: ()
     cfg.selectedCharacterCardIndex = index
     await setSettings(cfg)
     window.dispatchEvent(new CustomEvent('characterSelectionChanged', { detail: { index } }))
+    // 선택된 카드의 활성 채팅방으로 즉시 전환
+    try {
+      const activeRoom = await getActiveChatRoom(index)
+      const roomId = activeRoom || 'default'
+      const evt = new CustomEvent('chatRoomChanged', { detail: { roomId } })
+      window.dispatchEvent(evt)
+    } catch {}
     if (onCardSelect) onCardSelect()
   }
 
