@@ -1,7 +1,4 @@
 // ttsProcess.cjs - Google TTS + Fish Audio REST 통합 (CommonJS)
-const fs = require('fs-extra');
-const os = require('os');
-const path = require('path');
 const axios = require('axios');
 
 let CONFIG = {};
@@ -13,68 +10,46 @@ const COLOR_RESET = '\x1b[0m';
 
 function nowDelta() { const delta = 0; return `${new Date().toISOString()} ${delta.toFixed ? '+'+delta.toFixed(3)+'ms ' : ''}`; }
 
-const cp = require('child_process');
+// ffmpeg 종속성 제거: child_process/ffmpeg 사용 제거
 
-function pcmToWavBuffer(pcmBuffer, sampleRate = 24000, channels = 1) {
-	const bytesPerSample = 2;
-	const blockAlign = channels * bytesPerSample;
-	const byteRate = sampleRate * blockAlign;
-	const dataSize = pcmBuffer.length;
-	const header = Buffer.alloc(44);
-	header.write('RIFF', 0);
-	header.writeUInt32LE(36 + dataSize, 4);
-	header.write('WAVE', 8);
-	header.write('fmt ', 12);
-	header.writeUInt32LE(16, 16);
-	header.writeUInt16LE(1, 20);
-	header.writeUInt16LE(channels, 22);
-	header.writeUInt32LE(sampleRate, 24);
-	header.writeUInt32LE(byteRate, 28);
-	header.writeUInt16LE(blockAlign, 32);
-	header.writeUInt16LE(bytesPerSample * 8, 34);
-	header.write('data', 36);
-	header.writeUInt32LE(dataSize, 40);
-	return Buffer.concat([header, pcmBuffer]);
-}
+// Discord 관련 ffmpeg 변환 스트림은 제거되었습니다.
 
-function makeAudioResourceFromFile(fp) {
-	const { createAudioResource, StreamType } = require('@discordjs/voice');
-	const { createReadStream } = require('fs');
-	const ext = (path.extname(fp) || '').toLowerCase().replace('.', '');
-	const needsTranscode = ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg'].includes(ext);
-	if (needsTranscode) {
-		try {
-			try {
-				const h = fs.readFileSync(fp, { encoding: null, start: 0, end: 31 });
-				console.log(`${nowDelta()}[TTS][ffmpeg] file header=${h.slice(0,12).toString('ascii').replace(/[^ -~]/g, '.')}`);
-			} catch (e) { /* ignore header read errors */ }
-			try {
-				const st = fs.statSync(fp);
-				if (!st || typeof st.size !== 'number' || st.size < 44) {
-					console.warn(`${nowDelta()}[TTS][ffmpeg] skipping ffmpeg for small/invalid file (${fp}) size=${st && st.size}`);
-					return createAudioResource(createReadStream(fp));
-				}
-			} catch (e) {
-				console.warn(`${nowDelta()}[TTS][ffmpeg] stat failed for ${fp}, falling back to file stream`, e && e.message ? e.message : e);
-				return createAudioResource(createReadStream(fp));
+// WAV(RIFF)에서 순수 PCM 데이터를 추출 (16-bit PCM 가정)
+function extractPcmFromWav(wavBuf) {
+	try {
+		if (!wavBuf || wavBuf.length < 44) return null;
+		if (wavBuf.toString('ascii', 0, 4) !== 'RIFF') return null;
+		if (wavBuf.toString('ascii', 8, 12) !== 'WAVE') return null;
+		let offset = 12;
+		let fmtChunk = null;
+		let dataChunk = null;
+		while (offset + 8 <= wavBuf.length) {
+			const id = wavBuf.toString('ascii', offset, offset + 4);
+			const size = wavBuf.readUInt32LE(offset + 4);
+			const next = offset + 8 + size;
+			if (id === 'fmt ') {
+				fmtChunk = { offset: offset + 8, size };
+			} else if (id === 'data') {
+				dataChunk = { offset: offset + 8, size };
 			}
-			let ffmpegCmd = process.env.FFMPEG_PATH || path.join(__dirname, 'ffmpeg.exe');
-			if (!fs.existsSync(ffmpegCmd)) ffmpegCmd = process.env.FFMPEG_PATH || 'ffmpeg';
-			const args = ['-i', fp, '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'];
-			console.log(`${nowDelta()}[TTS][ffmpeg] spawn: ${ffmpegCmd} ${args.join(' ')}`);
-			const ff = cp.spawn(ffmpegCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-			ff.on('error', (err) => { console.warn(`${nowDelta()}[TTS][ffmpeg] spawn failed:`, err && err.message ? err.message : err); });
-			ff.stderr.on('data', (d) => { try { console.log(`${nowDelta()}[TTS][ffmpeg][stderr]`, d.toString().trim()); } catch(e){} });
-			ff.on('exit', (code, sig) => { console.log(`${nowDelta()}[TTS][ffmpeg] exit code=${code} signal=${sig}`); });
-			return createAudioResource(ff.stdout, { inputType: StreamType.Raw });
-		} catch (e) {
-			console.warn('Failed to spawn ffmpeg for', fp, e && e.message ? e.message : e);
+			offset = next;
 		}
+		if (!fmtChunk || !dataChunk) return null;
+		const audioFormat = wavBuf.readUInt16LE(fmtChunk.offset + 0);
+		const numChannels = wavBuf.readUInt16LE(fmtChunk.offset + 2);
+		const sampleRate = wavBuf.readUInt32LE(fmtChunk.offset + 4);
+		const bitsPerSample = wavBuf.readUInt16LE(fmtChunk.offset + 14);
+		if (audioFormat !== 1) return null; // PCM only
+		if (bitsPerSample !== 16) return null; // 16-bit only for now
+		const pcm = wavBuf.subarray(dataChunk.offset, dataChunk.offset + dataChunk.size);
+		return { pcm, sampleRate, channels: numChannels };
+	} catch (e) {
+		return null;
 	}
-	return createAudioResource(createReadStream(fp));
 }
 
-async function synthChunkSync(textChunk, index = 0) {
+// TTS 텍스트를 PCM(Buffer)으로 동기 생성 (임시파일 없이 반환)
+async function synthChunkPCM(textChunk, index = 0) {
 	const preferred = (process.env.TTS_PROVIDER || CONFIG.ttsProvider || '').toString().toLowerCase();
 	const fishKey = process.env.FISH_AUDIO_API_KEY || CONFIG.fishAudioApiKey;
 	const fishModelId = process.env.FISH_AUDIO_MODEL_ID || CONFIG.fishAudioModelId;
@@ -86,11 +61,11 @@ async function synthChunkSync(textChunk, index = 0) {
 				temperature: 0.7,
 				top_p: 0.7,
 				prosody: {},
-				chunk_length: 280,
+				chunk_length: 120,
 				normalize: false,
-				format: 'mp3',
-				mp3_bitrate: 128,
-				opus_bitrate: 32,
+				// FishAudio: PCM 원시 데이터 요청 (16-bit mono, 44.1kHz 기본)
+				format: 'pcm',
+				sample_rate: 44100,
 				latency: 'balanced',
 				text: textChunk,
 				references: [],
@@ -104,14 +79,21 @@ async function synthChunkSync(textChunk, index = 0) {
 				},
 				responseType: 'arraybuffer'
 			};
-			console.log(`${nowDelta()}${COLOR_ORANGE}[FishAudio][Request][idx=${index}]${COLOR_RESET}`, requestBody);
+			console.log(`${nowDelta()}${COLOR_ORANGE}[FishAudio][PCM Request][idx=${index}]${COLOR_RESET}`, { format: 'pcm', sample_rate: 44100 });
 			const resp = await axios.post(url, requestBody, axiosConfig);
-			console.log(`${nowDelta()}[FishAudio][Response][idx=${index}] status=${resp.status} bytes=${resp.data ? resp.data.byteLength : 0}`);
-			const tmp = path.join(os.tmpdir(), `ai_date_tts_${Date.now()}_${Math.floor(Math.random()*10000)}.mp3`);
-			fs.writeFileSync(tmp, Buffer.from(resp.data));
-			return tmp;
+			const buf = Buffer.from(resp.data);
+			// 일부 환경이 WAV로 응답할 수 있어 감지 후 PCM 추출
+			if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF') {
+				const parsed = extractPcmFromWav(buf);
+				if (parsed) {
+					console.log(`${nowDelta()}[FishAudio][PCM Response] WAV->PCM extracted bytes=${parsed.pcm.length} rate=${parsed.sampleRate} ch=${parsed.channels}`);
+					return { buffer: parsed.pcm, sampleRate: parsed.sampleRate, channels: parsed.channels };
+				}
+			}
+			console.log(`${nowDelta()}[FishAudio][PCM Response] bytes=${buf.length} rate=44100 ch=1 (assumed)`);
+			return { buffer: buf, sampleRate: 44100, channels: 1 };
 		} catch (e) {
-			console.warn('Fish Audio synth failed, falling back to Gemini TTS', e.response ? { status: e.response.status, data: e.response.data } : e.message || e);
+			console.warn('Fish Audio PCM synth failed, falling back to Gemini TTS', e.response ? { status: e.response.status, data: e.response.data } : e.message || e);
 		}
 	}
 
@@ -129,136 +111,63 @@ async function synthChunkSync(textChunk, index = 0) {
 				speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
 			};
 			const contents = [{ role: 'user', parts: [{ text: textChunk }] }];
-			console.log(`${nowDelta()}${COLOR_ORANGE}[GeminiTTS][Request][idx=${index}]${COLOR_RESET}`, { model, voiceName });
+			console.log(`${nowDelta()}${COLOR_ORANGE}[GeminiTTS][PCM Request][idx=${index}]${COLOR_RESET}`, { model, voiceName });
 			const stream = await ai.models.generateContentStream({ model, config, contents });
+			let chunks = [];
+			let mimeSeen = '';
 			for await (const chunk of stream) {
 				try {
 					const inline = chunk?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
 					if (inline && inline.data) {
-							const mime = inline.mimeType || '';
-							let ext = 'wav';
-							try { ext = require('mime').getExtension(mime) || ext; } catch (e) {}
-							const tmp = path.join(os.tmpdir(), `ai_date_gemini_tts_${Date.now()}_${Math.floor(Math.random()*10000)}.${ext}`);
-							let buffer;
-							try {
-								if (typeof inline.data === 'string') {
-									let s = inline.data;
-									const m = s.match(/^data:.*;base64,(.*)$/);
-									if (m) s = m[1];
-									buffer = Buffer.from(s, 'base64');
-								} else if (inline.data && (inline.data instanceof Uint8Array || inline.data.buffer instanceof ArrayBuffer)) {
-									buffer = Buffer.from(inline.data);
-								} else if (Array.isArray(inline.data)) {
-									buffer = Buffer.from(inline.data);
-								} else {
-									buffer = Buffer.from(String(inline.data || ''), 'base64');
-								}
-							} catch (e) {
-								console.warn(`${nowDelta()}[GeminiTTS][Response][idx=${index}] decode failed`, e && e.message ? e.message : e);
-								buffer = Buffer.from('');
-							}
-							try {
-								const mlow = (mime || '').toLowerCase();
-								if (mlow.includes('l16') || mlow.includes('pcm') || mlow.includes('audio/l16')) {
-									let rate = 24000; let channels = 1;
-									const rmatch = mlow.match(/rate=(\d+)/);
-									if (rmatch) rate = Number(rmatch[1]);
-									const cmatch = mlow.match(/channels=(\d+)/);
-									if (cmatch) channels = Number(cmatch[1]);
-									const wavBuf = pcmToWavBuffer(buffer, rate, channels);
-									fs.writeFileSync(tmp, wavBuf);
-									console.log(`${nowDelta()}[GeminiTTS][Response][idx=${index}] wrapped PCM->WAV mime=${mime} file=${tmp} bytes=${wavBuf.length}`);
-								} else {
-									fs.writeFileSync(tmp, buffer);
-								}
-							} catch (e) {
-								fs.writeFileSync(tmp, buffer);
-							}
-							return tmp;
+						mimeSeen = inline.mimeType || mimeSeen;
+						let buffer;
+						if (typeof inline.data === 'string') {
+							let s = inline.data;
+							const m = s.match(/^data:.*;base64,(.*)$/);
+							if (m) s = m[1];
+							buffer = Buffer.from(s, 'base64');
+						} else if (inline.data && (inline.data instanceof Uint8Array || inline.data.buffer instanceof ArrayBuffer)) {
+							buffer = Buffer.from(inline.data);
+						} else if (Array.isArray(inline.data)) {
+							buffer = Buffer.from(inline.data);
+						} else {
+							buffer = Buffer.from(String(inline.data || ''), 'base64');
+						}
+						chunks.push(buffer);
 					}
-				} catch (e) { console.warn('Gemini TTS chunk parse failed', e && e.message ? e.message : e); }
+				} catch (e) {
+					console.warn('Gemini TTS chunk parse failed', e && e.message ? e.message : e);
+				}
 			}
+			const all = Buffer.concat(chunks);
+			const mlow = (mimeSeen || '').toLowerCase();
+			if (mlow.includes('l16') || mlow.includes('pcm') || mlow.includes('audio/l16')) {
+				// 추정 샘플레이트 파싱
+				let rate = 24000; let channels = 1;
+				const rmatch = mlow.match(/rate=(\d+)/);
+				if (rmatch) rate = Number(rmatch[1]);
+				const cmatch = mlow.match(/channels=(\d+)/);
+				if (cmatch) channels = Number(cmatch[1]);
+				console.log(`${nowDelta()}[GeminiTTS][PCM Response] bytes=${all.length} rate=${rate} ch=${channels}`);
+				return { buffer: all, sampleRate: rate, channels };
+			} else if (all.length >= 12 && all.toString('ascii', 0, 4) === 'RIFF') {
+				const parsed = extractPcmFromWav(all);
+				if (parsed) {
+					console.log(`${nowDelta()}[GeminiTTS][WAV->PCM] bytes=${parsed.pcm.length} rate=${parsed.sampleRate} ch=${parsed.channels}`);
+					return { buffer: parsed.pcm, sampleRate: parsed.sampleRate, channels: parsed.channels };
+				}
+			}
+			// 알 수 없는 포맷: 최후 수단으로 RAW로 간주
+			console.log(`${nowDelta()}[GeminiTTS][UnknownAudio] returning RAW as PCM bytes=${all.length}`);
+			return { buffer: all, sampleRate: 24000, channels: 1 };
 		} catch (e) {
 			console.warn('Gemini TTS failed or @google/genai not available', e && e.message ? e.message : e);
 		}
 	}
 
-	const GEMINI_KEY_FALLBACK = process.env.GEMINI_API_KEY || CONFIG.geminiApiKey;
-	if (GEMINI_KEY_FALLBACK) {
-		try {
-			const { GoogleGenAI } = require('@google/genai');
-			const ai = new GoogleGenAI({ apiKey: GEMINI_KEY_FALLBACK });
-			const model = CONFIG.geminiTtsModel || 'gemini-2.5-flash-preview-tts';
-			const voiceName = (process.env.GEMINI_TTS_VOICE || CONFIG.geminiTtsVoiceName || 'Zephyr');
-			const config = {
-				temperature: 0.7,
-				responseModalities: ['audio'],
-				speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
-			};
-			const contents = [{ role: 'user', parts: [{ text: textChunk }] }];
-			console.log(`${nowDelta()}${COLOR_ORANGE}[GeminiTTS][FallbackRequest][idx=${index}]${COLOR_RESET}`, { model, voiceName });
-			const stream = await ai.models.generateContentStream({ model, config, contents });
-			for await (const chunk of stream) {
-				try {
-					const inline = chunk?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-					if (inline && inline.data) {
-							const mime = inline.mimeType || '';
-							let ext = 'wav';
-							try { ext = require('mime').getExtension(mime) || ext; } catch (e) {}
-							const tmp = path.join(os.tmpdir(), `ai_date_gemini_tts_${Date.now()}_${Math.floor(Math.random()*10000)}.${ext}`);
-							let buffer;
-							try {
-								if (typeof inline.data === 'string') {
-									let s = inline.data;
-									const m = s.match(/^data:.*;base64,(.*)$/);
-									if (m) s = m[1];
-									buffer = Buffer.from(s, 'base64');
-								} else if (inline.data && (inline.data instanceof Uint8Array || inline.data.buffer instanceof ArrayBuffer)) {
-									buffer = Buffer.from(inline.data);
-								} else if (Array.isArray(inline.data)) {
-									buffer = Buffer.from(inline.data);
-								} else {
-									buffer = Buffer.from(String(inline.data || ''), 'base64');
-								}
-							} catch (e) {
-								console.warn(`${nowDelta()}[GeminiTTS][FallbackResponse][idx=${index}] decode failed`, e && e.message ? e.message : e);
-								buffer = Buffer.from('');
-							}
-							try {
-								const mlow = (mime || '').toLowerCase();
-								if (mlow.includes('l16') || mlow.includes('pcm') || mlow.includes('audio/l16')) {
-									let rate = 24000; let channels = 1;
-									const rmatch = mlow.match(/rate=(\d+)/);
-									if (rmatch) rate = Number(rmatch[1]);
-									const cmatch = mlow.match(/channels=(\d+)/);
-									if (cmatch) channels = Number(cmatch[1]);
-									const wavBuf = pcmToWavBuffer(buffer, rate, channels);
-									fs.writeFileSync(tmp, wavBuf);
-									console.log(`${nowDelta()}[GeminiTTS][FallbackResponse][idx=${index}] wrapped PCM->WAV mime=${mime} file=${tmp} bytes=${wavBuf.length}`);
-								} else {
-									fs.writeFileSync(tmp, buffer);
-								}
-							} catch (e) {
-								fs.writeFileSync(tmp, buffer);
-							}
-							return tmp;
-					}
-				} catch (e) { console.warn('Gemini TTS fallback chunk parse failed', e && e.message ? e.message : e); }
-			}
-		} catch (e) {
-			console.warn('Gemini TTS fallback failed or @google/genai not available', e && e.message ? e.message : e);
-		}
-	}
-
-	try {
-		const tmp = path.join(os.tmpdir(), `ai_date_tts_placeholder_${Date.now()}_${Math.floor(Math.random()*10000)}.txt`);
-		fs.writeFileSync(tmp, `TTS_PLACEHOLDER:\n${textChunk}`);
-		return tmp;
-	} catch (e) {
-		console.error('Failed to create placeholder TTS file', e && e.message ? e.message : e);
-		return null;
-	}
+	// 최후 수단: 빈 PCM
+	return { buffer: Buffer.alloc(0), sampleRate: 44100, channels: 1 };
 }
 
-module.exports = { pcmToWavBuffer, makeAudioResourceFromFile, synthChunkSync };
+module.exports = { synthChunkPCM, extractPcmFromWav };
 

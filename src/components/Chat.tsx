@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { getSettings, getConversationHistory, saveConversationHistory, getActiveChatRoom, getRoomAuthorNotes } from '../lib/indexeddb'
 import { buildPromptMessages, PromptBlock } from '../lib/promptBuilder'
+import { PCMWebSocketPlayer, buildWsUrl } from '../lib/pcmWsPlayer'
 
 interface Message {
   role: 'user' | 'assistant';
@@ -105,9 +106,12 @@ export default function Chat(){
   const MIN_BLOB_BYTES = 8000;  // ignore if recorded payload too small
   const MIN_TEXT_CHARS = 2;     // ignore too short transcripts
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null); // kept for legacy
+  const playbackAudioContextRef = useRef<AudioContext | null>(null);
+  const wsPlayerRef = useRef<PCMWebSocketPlayer | null>(null);
   // TTS: preserve strict order using sequence numbers
-  interface TTSItem { seq: number; ready: boolean; url: string; text: string }
+  interface PCMData { data: ArrayBuffer; sampleRate: number; channels: number }
+  interface TTSItem { seq: number; ready: boolean; text: string; pcm?: PCMData; ws?: boolean; wsPromise?: Promise<void> }
   const ttsQueueRef = useRef<TTSItem[]>([]);
   const ttsSeqRef = useRef(0); // sequence to assign to next item
   const ttsNextSeqToPlayRef = useRef(0); // next sequence expected to play
@@ -345,13 +349,61 @@ export default function Chat(){
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
-  // Synthesize persona TTS (for user input)
-  async function synthesizePersonaTTS(text: string): Promise<string> {
+  // Ensure playback AudioContext
+  function getPlaybackContext(): AudioContext {
+    if (!playbackAudioContextRef.current) {
+      playbackAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    return playbackAudioContextRef.current;
+  }
+
+  // Play 16-bit PCM (little-endian) via Web Audio
+  async function playPCM(pcm: PCMData): Promise<void> {
+    const ctx = getPlaybackContext();
+    if (ctx.state === 'suspended') {
+      try { await ctx.resume(); } catch {}
+    }
+    const { data, sampleRate, channels } = pcm;
+    const view = new DataView(data);
+    const chs = Math.max(1, channels|0);
+    const totalFrames = Math.floor(view.byteLength / 2 / chs);
+    const audioBuf = ctx.createBuffer(chs, totalFrames, sampleRate);
+    for (let ch = 0; ch < chs; ch++) {
+      const arr = audioBuf.getChannelData(ch);
+      let w = 0;
+      for (let i = 0; i < totalFrames; i++) {
+        const idx = (i * chs + ch) * 2;
+        const s = view.getInt16(idx, true);
+        arr[w++] = s / 32768;
+      }
+    }
+    await new Promise<void>((resolve, reject) => {
+      try {
+        const src = ctx.createBufferSource();
+        src.buffer = audioBuf;
+        src.connect(ctx.destination);
+        src.onended = () => resolve();
+        src.start();
+      } catch (e) { reject(e as any); }
+    });
+  }
+
+  async function parsePcmResponse(resp: Response): Promise<PCMData | null> {
+    if (!resp.ok) return null;
+    const sr = Number(resp.headers.get('X-Audio-Sample-Rate') || '44100') || 44100;
+    const ch = Number(resp.headers.get('X-Audio-Channels') || '1') || 1;
+    const ab = await resp.arrayBuffer();
+    if (!ab || ab.byteLength === 0) return null;
+    return { data: ab, sampleRate: sr, channels: ch };
+  }
+
+  // Synthesize persona TTS (for user input) to PCM
+  async function synthesizePersonaTTS(text: string): Promise<PCMData | null> {
     try {
-      if (!personaTTS || !text.trim()) return '';
+      if (!personaTTS || !text.trim()) return null;
 
       const cleanedText = text.replace(/[,.!~?]+$/g, '').trim();
-      if (!cleanedText) return '';
+  if (!cleanedText) return null;
 
       const settings = await getSettings();
       const requestBody: any = { 
@@ -369,38 +421,37 @@ export default function Chat(){
 
       console.log('[Chat] Persona TTS request:', requestBody);
 
-      const response = await fetch('/api/tts/synthesize', {
+      const response = await fetch('/api/tts/synthesize-pcm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
       });
 
       if (response.ok) {
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        return audioUrl;
+        const pcm = await parsePcmResponse(response);
+        return pcm;
       } else {
         console.error('[Chat] Persona TTS error:', response.status);
-        return '';
+        return null;
       }
     } catch (error) {
       console.error('[Chat] Persona TTS error:', error);
-      return '';
+      return null;
     }
   }
 
   // Synthesize a TTS audio URL immediately (non-blocking playback)
-  async function synthesizeTTS(text: string): Promise<string> {
+  async function synthesizeTTS(text: string): Promise<PCMData | null> {
     try {
       // 캐릭터 TTS가 설정되어 있으면 사용안함 옵션을 선택한 경우 TTS 사용하지 않음
       if (!characterTTS) {
         console.log('[Chat] Character TTS not configured, skipping TTS');
-        return '';
+  return null;
       }
       
       // Pre-process text: remove trailing punctuation to prevent TTS model from adding unwanted continuation
       const cleanedText = text.replace(/[,.!~?]+$/g, '').trim();
-      if (!cleanedText) return '';
+  if (!cleanedText) return null;
 
       const settings = await getSettings();
       const provider = characterTTS.provider;
@@ -434,43 +485,72 @@ export default function Chat(){
         requestBody.fishModelId = fishModelId;
       }
 
-      const response = await fetch('/api/tts/synthesize', {
+      const response = await fetch('/api/tts/synthesize-pcm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
       });
 
       if (response.ok) {
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        return audioUrl;
+        const pcm = await parsePcmResponse(response);
+        return pcm;
       } else {
         console.error('[Chat] TTS error:', response.status);
-        return '';
+        return null;
       }
     } catch (error) {
       console.error('[Chat] TTS playback error:', error);
-      return '';
+      return null;
+    }
+  }
+
+  // Try low-latency WebSocket streaming for TTS (Gemini only). Returns a promise that resolves when playback finishes, or null if WS not used.
+  async function synthesizeTTSWS(text: string): Promise<Promise<void> | null> {
+    try {
+      if (!characterTTS) return null;
+      const cleanedText = text.replace(/[,.!~?]+$/g, '').trim();
+      if (!cleanedText) return null;
+      // WS currently supported for Gemini path
+      if (characterTTS.provider !== 'gemini') return null;
+      const settings = await getSettings();
+      const apiKey = settings?.geminiApiKey || '';
+      if (!apiKey) return null;
+      const voice = characterTTS.voice || 'Zephyr';
+      const model = characterTTS.model;
+      const url = buildWsUrl('/ws/tts');
+      if (!wsPlayerRef.current) wsPlayerRef.current = new PCMWebSocketPlayer(url);
+      const playPromise = wsPlayerRef.current.start({ text: cleanedText, provider: 'gemini', apiKey, voice, model });
+      return playPromise;
+    } catch (e) {
+      console.warn('[Chat] synthesizeTTSWS failed', e);
+      return null;
     }
   }
 
   // Enqueue text for TTS with strict order guarantee and display sync
   function enqueueTTSOrdered(text: string) {
     const seq = ttsSeqRef.current++;
-    const item: TTSItem = { seq, ready: false, url: '', text };
+    const item: TTSItem = { seq, ready: false, text };
     ttsQueueRef.current.push(item);
     
-    // Kick off synthesis asynchronously; when ready, attempt to play if it's next
-    synthesizeTTS(text).then((url) => {
-      item.url = url;
+    // Prefer WS streaming for lower latency when available (Gemini)
+    (async () => {
+      const wsP = await synthesizeTTSWS(text);
+      if (wsP) {
+        item.ws = true;
+        item.wsPromise = wsP;
+        item.ready = true;
+        attemptPlayNextOrdered();
+        return;
+      }
+      // Fallback to HTTP PCM synthesis
+      try {
+        const pcm = await synthesizeTTS(text);
+        if (pcm) item.pcm = pcm;
+      } catch {}
       item.ready = true;
       attemptPlayNextOrdered();
-    }).catch(() => {
-      // mark as ready but no URL, we'll skip but keep order
-      item.url = '';
-      item.ready = true;
-      attemptPlayNextOrdered();
-    });
+    })();
   }
 
   // Animate typing effect for current sentence
@@ -512,7 +592,7 @@ export default function Chat(){
     if (!nextItem.ready) return; // wait until synthesized
 
     // If synthesis failed, skip but advance order
-    if (!nextItem.url) {
+    if (!nextItem.pcm) {
       // remove the item and advance sequence
       ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
       ttsNextSeqToPlayRef.current = nextSeq + 1;
@@ -528,42 +608,7 @@ export default function Chat(){
     }
 
     ttsPlayingRef.current = true;
-    const audioUrl = nextItem.url;
-    const audio = new Audio(audioUrl);
-    audioRef.current = audio;
-    // Helper: apply sink before playing for reliability
-    const applySinkThenPlay = async () => {
-      try {
-        const settings = await getSettings();
-        const sinkId = (settings as any)?.selectedOutputId;
-        console.log('[Chat] TTS attempting to set output device:', { sinkId, hasSinkIdSupport: typeof (audio as any).setSinkId === 'function' });
-        if (sinkId && typeof (audio as any).setSinkId === 'function') {
-          await (audio as any).setSinkId(sinkId);
-          console.log('[Chat] TTS successfully set output device to:', sinkId);
-        } else if (!sinkId) {
-          console.log('[Chat] No output device selected, using default');
-        } else {
-          console.warn('[Chat] setSinkId not supported by browser');
-        }
-      } catch (e) { 
-        console.error('[Chat] setSinkId failed:', e);
-        // Don't fail playback if setSinkId fails, just use default output
-      }
-      try {
-        await audio.play();
-        console.log('[Chat] TTS playing:', currentSentence);
-      } catch (e) {
-        console.error('[Chat] Audio play error:', e);
-        // Clean up on error
-        if (typingTimer) clearInterval(typingTimer);
-        ttsPlayingRef.current = false;
-        ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
-        ttsNextSeqToPlayRef.current = nextSeq + 1;
-        setCurrentTypingSentence('');
-        // Immediately attempt to play next to avoid any visual gap
-        attemptPlayNextOrdered();
-      }
-    };
+    // We will play PCM via Web Audio, sink selection is not supported with Web Audio output
     
     // Get the sentence for this sequence
     const currentSentence = nextItem.text || '';
@@ -591,39 +636,12 @@ export default function Chat(){
       console.log('[Chat] Typing animation completed for sentence:', currentSentence);
     });
     
-    // Update typing speed when audio metadata is loaded (to get accurate duration)
-    const updateTypingSpeed = () => {
-      const audioMs = audio.duration > 0 ? audio.duration * 1000 : estimatedDuration + TYPING_LEAD_MS;
-      const adjustedDuration = Math.max(300, audioMs - TYPING_LEAD_MS);
-      console.log('[Chat] Audio metadata loaded, updating typing speed:', { 
-        audioMs,
-        adjustedDuration,
-        estimatedDuration,
-        leadMs: TYPING_LEAD_MS,
-        differenceFromEstimated: adjustedDuration - estimatedDuration
-      });
-      
-      // Only restart if there's significant difference (more than 300ms)
-      if (Math.abs(adjustedDuration - estimatedDuration) > 300 && typingTimer) {
-        clearInterval(typingTimer);
-        typingTimer = animateTyping(currentSentence, adjustedDuration, () => {
-          console.log('[Chat] Typing animation completed for sentence:', currentSentence);
-        });
-      }
-    };
-    
-    // Listen for metadata loaded event to adjust speed
-    if (audio.readyState >= 1) {
-      // Metadata already loaded
-      updateTypingSpeed();
-    } else {
-      audio.addEventListener('loadedmetadata', updateTypingSpeed, { once: true });
-    }
-    
-    // Apply sink (if any) and then play
-    applySinkThenPlay();
-    
-    audio.onended = () => {
+    // Decide playback path
+    const playPromise: Promise<void> = nextItem.ws && nextItem.wsPromise
+      ? nextItem.wsPromise
+      : playPCM(nextItem.pcm!);
+
+    playPromise.then(() => {
       console.log('[Chat] TTS ended:', currentSentence);
       console.log('[Chat] Current state:', {
         completedCount: completedSentencesForDisplay.length,
@@ -632,8 +650,6 @@ export default function Chat(){
       });
       
       if (typingTimer) clearInterval(typingTimer);
-      URL.revokeObjectURL(audioUrl);
-      audioRef.current = null;
       ttsPlayingRef.current = false;
       
       // remove the played item and advance sequence
@@ -659,7 +675,15 @@ export default function Chat(){
       
   // Immediately attempt to play next to avoid any visual gap
   attemptPlayNextOrdered();
-    };
+    }).catch((e) => {
+      console.error('[Chat] PCM playback error:', e);
+      if (typingTimer) clearInterval(typingTimer);
+      ttsPlayingRef.current = false;
+      ttsQueueRef.current = ttsQueueRef.current.filter(i => i !== nextItem);
+      ttsNextSeqToPlayRef.current = nextSeq + 1;
+      setCurrentTypingSentence('');
+      attemptPlayNextOrdered();
+    });
   }
 
   // Delete message
@@ -781,61 +805,26 @@ export default function Chat(){
       
       personaTTSPromise = (async () => {
         // Use transformed input for persona TTS as well
-        const personaTTSUrl = await synthesizePersonaTTS(transformedInputForDisplay);
+        const personaPCM = await synthesizePersonaTTS(transformedInputForDisplay);
         
-        if (personaTTSUrl) {
+        if (personaPCM) {
           personaTTSPlayingRef.current = true;
-          const audio = new Audio(personaTTSUrl);
-          
-          // 출력 장치 설정
           try {
-            const settings = await getSettings();
-            const sinkId = (settings as any)?.selectedOutputId;
-            if (sinkId && typeof (audio as any).setSinkId === 'function') {
-              await (audio as any).setSinkId(sinkId);
-            }
+            await playPCM(personaPCM);
+            console.log('[Chat] Persona TTS playback ended');
           } catch (e) {
-            console.error('[Chat] Persona TTS setSinkId failed:', e);
+            console.error('[Chat] Persona TTS playback error', e);
           }
-
-          // 페르소나 TTS 재생
-          await new Promise<void>((resolve) => {
-            audio.onended = () => {
-              console.log('[Chat] Persona TTS playback ended');
-              URL.revokeObjectURL(personaTTSUrl);
-              personaTTSPlayingRef.current = false;
-              personaTTSScheduledRef.current = false; // 예약 해제
-              
-              // 1~2초 랜덤 대기 후 일반 TTS 재생 시작
-              const delay = 1000 + Math.random() * 1000; // 1000ms ~ 2000ms
-              console.log(`[Chat] Waiting ${delay.toFixed(0)}ms before starting response TTS`);
-              setTimeout(() => {
-                // TTS 큐에 쌓인 것들 재생 시작
-                attemptPlayNextOrdered();
-                resolve();
-              }, delay);
-            };
-            
-            audio.onerror = () => {
-              console.error('[Chat] Persona TTS playback error');
-              URL.revokeObjectURL(personaTTSUrl);
-              personaTTSPlayingRef.current = false;
-              personaTTSScheduledRef.current = false; // 예약 해제
-              // 에러 시에도 TTS 큐 재생 시도
-              attemptPlayNextOrdered();
-              resolve();
-            };
-            
-            audio.play().catch((e) => {
-              console.error('[Chat] Persona TTS play failed:', e);
-              URL.revokeObjectURL(personaTTSUrl);
-              personaTTSPlayingRef.current = false;
-              personaTTSScheduledRef.current = false; // 예약 해제
-              // 재생 실패 시에도 TTS 큐 재생 시도
-              attemptPlayNextOrdered();
-              resolve();
-            });
-          });
+          personaTTSPlayingRef.current = false;
+          personaTTSScheduledRef.current = false; // 예약 해제
+          
+          // 1~2초 랜덤 대기 후 일반 TTS 재생 시작
+          const delay = 1000 + Math.random() * 1000; // 1000ms ~ 2000ms
+          console.log(`[Chat] Waiting ${delay.toFixed(0)}ms before starting response TTS`);
+          setTimeout(() => {
+            // TTS 큐에 쌓인 것들 재생 시작
+            attemptPlayNextOrdered();
+          }, delay);
         } else {
           // URL 생성 실패 시에도 플래그 해제
           personaTTSScheduledRef.current = false;

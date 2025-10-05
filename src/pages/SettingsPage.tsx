@@ -2,7 +2,6 @@ import React, { useEffect, useState, useRef } from 'react'
 import { getSettings as idbGetSettings, setSettings as idbSetSettings, getFishModels as idbGetFishModels, setFishModels as idbSetFishModels } from '../lib/indexeddb'
 import PromptSettings from './settings/PromptSettings'
 import ModelSettings from './settings/ModelSettings'
-import AudioSettings from './settings/AudioSettings'
 import PersonaSettings from './settings/PersonaSettings'
 import AdvancedSettings from './settings/AdvancedSettings'
 import { pushToast } from '../components/Toast'
@@ -13,13 +12,9 @@ export default function SettingsPage(){
     const saved = sessionStorage.getItem('settingsTab');
     return (saved as any) || 'llm';
   });
-  const [leftSection, setLeftSection] = useState<'prompt'|'model'|'audio'|'persona'|'advanced'>(() => {
+  const [leftSection, setLeftSection] = useState<'prompt'|'model'|'persona'|'advanced'>(() => {
     const saved = sessionStorage.getItem('settingsLeftSection');
     return (saved as any) || 'prompt';
-  });
-  const [audioTab, setAudioTab] = useState<'record'|'play'>(() => {
-    const saved = sessionStorage.getItem('settingsAudioTab');
-    return (saved as any) || 'record';
   });
 
   const [cfg, setCfg] = useState<any>({});
@@ -138,8 +133,6 @@ export default function SettingsPage(){
     const saved = sessionStorage.getItem('settingsPromptRightTab');
     return (saved as any) || 'blocks';
   });
-  // Save hook from AudioSettings to ensure latest audio selections are persisted before global save
-  const audioSaveRef = useRef<null | (() => Promise<void>)>(null);
   // Commit hook from PromptSettings to commit drafts before save
   const promptCommitRef = useRef<null | (() => void)>(null);
   // Helper: commit prompt/script drafts before switching prompt tabs
@@ -162,14 +155,10 @@ export default function SettingsPage(){
   }, [leftSection]);
 
   useEffect(() => {
-    sessionStorage.setItem('settingsAudioTab', audioTab);
-  }, [audioTab]);
-
-  useEffect(() => {
     sessionStorage.setItem('settingsPromptRightTab', promptRightTab);
   }, [promptRightTab]);
 
-  // audio
+  // 설정 및 모델 로드
   useEffect(()=>{
     (async ()=>{
       try{
@@ -189,32 +178,26 @@ export default function SettingsPage(){
     })();
   },[]);
 
-  // audio logic moved to AudioSettings component
-
   async function saveCfg(){
     try{
-  // Ensure latest audio settings are saved before consolidating cfg
-  if (audioSaveRef.current) {
-    try { await audioSaveRef.current(); } catch (e) { /* ignore child save errors, continue */ }
-  }
-  // Commit prompt drafts before reading
-  if (promptCommitRef.current) {
-    try { promptCommitRef.current(); } catch (e) { /* ignore */ }
-  }
-  // Wait a tick for state updates
-  await new Promise(resolve => setTimeout(resolve, 10));
-  // Persist latest child-local edits if available
-  const effectiveBlocks = promptLocalRef.current ?? promptBlocks;
-  // Sync parent state to latest before save
-  setPromptBlocks(effectiveBlocks);
-  // Read latest settings from IndexedDB and merge with current cfg state
-  const latest = await idbGetSettings();
-  
-  console.log('[SettingsPage] saveCfg - cfg.personas:', cfg?.personas);
-  console.log('[SettingsPage] saveCfg - cfg.personas[1].characterData.extensions.characterTTS:', cfg?.personas?.[1]?.characterData?.data?.extensions?.characterTTS);
-  
-  // cfg에는 페르소나 정보 등 최신 상태가 들어있으므로 cfg를 우선으로 병합
-  await idbSetSettings({ ...(latest || {}), ...cfg, promptBlocks: effectiveBlocks });
+      // Commit prompt drafts before reading
+      if (promptCommitRef.current) {
+        try { promptCommitRef.current(); } catch (e) { /* ignore */ }
+      }
+      // Wait a tick for state updates
+      await new Promise(resolve => setTimeout(resolve, 10));
+      // Persist latest child-local edits if available
+      const effectiveBlocks = promptLocalRef.current ?? promptBlocks;
+      // Sync parent state to latest before save
+      setPromptBlocks(effectiveBlocks);
+      // Read latest settings from IndexedDB and merge with current cfg state
+      const latest = await idbGetSettings();
+      
+      console.log('[SettingsPage] saveCfg - cfg.personas:', cfg?.personas);
+      console.log('[SettingsPage] saveCfg - cfg.personas[1].characterData.extensions.characterTTS:', cfg?.personas?.[1]?.characterData?.data?.extensions?.characterTTS);
+      
+      // cfg에는 페르소나 정보 등 최신 상태가 들어있으므로 cfg를 우선으로 병합
+      await idbSetSettings({ ...(latest || {}), ...cfg, promptBlocks: effectiveBlocks });
       await idbSetFishModels(fishModels || []);
       setStatus('설정이 로컬에 저장되었습니다');
       pushToast('설정이 저장되었습니다','success');
@@ -288,7 +271,6 @@ export default function SettingsPage(){
         <aside className="w-32 md:w-48 bg-slate-800/50 border-r border-slate-700/50 p-2 md:p-6 flex flex-col gap-2">
           <button onClick={()=>setLeftSection('prompt')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='prompt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>프롬프트</button>
           <button onClick={()=>setLeftSection('model')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='model'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>모델</button>
-          <button onClick={()=>setLeftSection('audio')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='audio'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>오디오</button>
           <button onClick={()=>setLeftSection('persona')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='persona'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>페르소나</button>
           <button onClick={()=>setLeftSection('advanced')} className={`text-left px-2 md:px-3 py-2.5 rounded-lg transition-all text-xs md:text-sm ${leftSection==='advanced'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>고급설정</button>
         </aside>
@@ -296,12 +278,7 @@ export default function SettingsPage(){
         <main className="flex-1 md:w-[1000px] p-0 flex flex-col items-stretch">
           <div className="relative px-2 md:px-4 py-2 md:py-4 bg-slate-800/30 border-b border-slate-700/50">
             <div className="flex gap-1 md:gap-2 mb-0 justify-start flex-wrap">
-              {leftSection === 'audio' ? (
-                <>
-                  <button type="button" className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${audioTab==='record'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onClick={()=>setAudioTab('record')}>녹음</button>
-                  <button type="button" className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${audioTab==='play'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`} onClick={()=>setAudioTab('play')}>재생</button>
-                </>
-              ) : leftSection === 'model' ? (
+              {leftSection === 'model' ? (
                 <>
                   <button onClick={()=>setTab('llm')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='llm'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>LLM</button>
                   <button onClick={()=>setTab('stt')} className={`px-2 md:px-4 py-1.5 md:py-2 text-xs md:text-sm rounded-lg transition-all ${tab==='stt'?'bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold shadow-lg':'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white'}`}>STT</button>
@@ -319,10 +296,6 @@ export default function SettingsPage(){
           </div>
 
           <div className="flex-1 flex flex-col bg-slate-900/50 rounded-b-lg shadow-inner px-2 md:px-6 py-4 md:py-6 overflow-y-auto custom-scrollbar">
-            {leftSection === 'audio' && (
-              <AudioSettings leftSection={leftSection} audioTab={audioTab} cfg={cfg} setCfg={setCfg} onRegisterSave={(fn: ()=>Promise<void>)=>{ audioSaveRef.current = fn; }} />
-            )}
-
             {leftSection === 'model' && (
               <ModelSettings
                 tab={tab}
